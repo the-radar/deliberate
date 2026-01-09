@@ -1,0 +1,20 @@
+# Large downloaded models (download on first run)
+models/cmdcaliper-*/
+
+# Local caches
+.cache/
+__pycache__/
+*.pyc
+
+# Development
+node_modules/
+test/
+docs/
+*.log
+
+# Active learning (runtime generated)
+training/pending-review.jsonl
+training/approved-cases.log
+
+# Lock files
+package-lock.json

@@ -1,0 +1,68 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+
+# Prevent concurrent publishes
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  # Run full CI first
+  ci:
+    name: CI Checks
+    uses: ./.github/workflows/ci.yml
+
+  # Publish to npm using OIDC trusted publishing (tokenless)
+  publish:
+    name: Publish to npm
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write  # Required for OIDC trusted publishing
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: packages/claude-code
+
+      - name: Verify package version matches release tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          # Strip 'v' prefix from tag if present
+          TAG_VERSION="${RELEASE_TAG#v}"
+
+          echo "Package version: $PACKAGE_VERSION"
+          echo "Release tag version: $TAG_VERSION"
+
+          if [ "$PACKAGE_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::Package version ($PACKAGE_VERSION) does not match release tag ($TAG_VERSION)"
+            exit 1
+          fi
+        working-directory: packages/claude-code
+
+      - name: Publish to npm
+        run: npm publish --access public
+        working-directory: packages/claude-code
+
+      - name: Verify publish
+        env:
+          PACKAGE_VERSION: ${{ github.event.release.tag_name }}
+        run: |
+          TAG_VERSION="${PACKAGE_VERSION#v}"
+          echo "Waiting for npm to index the package..."
+          sleep 10
+          npm view "deliberate@$TAG_VERSION" version || echo "Package may take a few minutes to appear on npm"

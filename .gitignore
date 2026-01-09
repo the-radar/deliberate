@@ -1,0 +1,112 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+
+# OS files
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Deliberate specific
+.deliberate/
+audit.log
+*.gguf
+
+# Package files
+*.tgz
+# Note: package-lock.json is committed for reproducible CI builds
+
+# Development
+.cache/
+.parcel-cache/
+
+# Documentation work directory
+WORK/
+
+# Claude code
+CLAUDE.md
+cod_*.db
+packages/claude-code/models/
+packages/claude-code/.cache/
+
+# Session continuity (local only)
+CONTINUITY.md
+
+# Status/planning docs (local only)
+*-STATUS.md
+*-SUMMARY.md
+*_STATUS.md
+*_SUMMARY.md
+RELEASE_PLAN*.md
+INSTALL_GUIDE.md
+CLAUDE_CODE_INTEGRATION.md
+
+# Test scripts in root (should be in test/)
+test-*.sh
+test-*.js
+test-*.txt
+
+# Log files
+*-log.txt
+setup-log.txt
+start-log.txt
+
+# Demo files in root (move to demos/ if needed)
+demo-*.sh
+demo-*.js
+demo-*.ts
+deliberate-demo.sh
+interactive-demo.js
+analyze-deliberate-patterns.sh
+export-training-data.js
+
+# Fine-tuning docs (development only)
+fine-tuning-*.md
+
+# Pycache
+__pycache__/
+*.pyc
+
+# Claude commands (local customizations)
+.claude/commands/
+
+# Plan docs (development only)
+docs/plans/
+
+# More dev artifacts
+test-commands.txt
+test-safe-output.txt
+training-data.jsonl

@@ -1,0 +1,119 @@
+{
+  "name": "deliberate",
+  "version": "0.1.0",
+  "description": "Intelligent command wrapper that transforms dangerous single-step commands into carefully deliberated two-step decisions",
+  "keywords": [
+    "security",
+    "command-line",
+    "safety",
+    "sudo",
+    "ai",
+    "llm",
+    "command-wrapper"
+  ],
+  "homepage": "https://github.com/yourusername/deliberate",
+  "bugs": {
+    "url": "https://github.com/yourusername/deliberate/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/deliberate.git"
+  },
+  "license": "MIT",
+  "author": "Your Name <your.email@example.com>",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "deliberate": "./bin/deliberate"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "build:watch": "tsc --watch",
+    "clean": "rimraf dist",
+    "lint": "eslint src/**/*.ts",
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:security": "./tests/security-test.sh",
+    "test:dast": "./tests/dast/run-dast.sh",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run clean && npm run build && npm run test",
+    "postinstall": "node scripts/postinstall.js",
+    "dev": "ts-node src/index.ts"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
+    "js-yaml": "^4.1.0",
+    "lru-cache": "^10.1.0",
+    "semver": "^7.5.4",
+    "which": "^4.0.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.10",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^20.10.0",
+    "@types/semver": "^7.5.6",
+    "@types/which": "^3.0.3",
+    "@types/express": "^4.17.17",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "eslint-config-prettier": "^9.0.0",
+    "eslint-plugin-prettier": "^5.0.1",
+    "express": "^4.18.2",
+    "jest": "^29.7.0",
+    "jest-extended": "^6.0.0",
+    "jest-html-reporter": "^4.3.0",
+    "prettier": "^3.1.0",
+    "rimraf": "^5.0.5",
+    "ts-jest": "^29.1.1",
+    "ts-node": "^10.9.1",
+    "typescript": "^5.3.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "prettier": {
+    "semi": true,
+    "singleQuote": true,
+    "tabWidth": 2,
+    "trailingComma": "es5",
+    "printWidth": 100
+  },
+  "eslintConfig": {
+    "parser": "@typescript-eslint/parser",
+    "plugins": [
+      "@typescript-eslint",
+      "prettier"
+    ],
+    "extends": [
+      "eslint:recommended",
+      "plugin:@typescript-eslint/recommended",
+      "plugin:prettier/recommended"
+    ],
+    "env": {
+      "node": true,
+      "jest": true
+    },
+    "rules": {
+      "@typescript-eslint/no-explicit-any": "warn",
+      "@typescript-eslint/explicit-function-return-type": "off",
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          "argsIgnorePattern": "^_"
+        }
+      ]
+    }
+  }
+}

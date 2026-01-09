@@ -1,0 +1,164 @@
+{
+  "file_listing": [
+    {
+      "command": "ls",
+      "description": "List directory contents",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "ls -la",
+      "description": "List all files with details",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "find . -name '*.txt'",
+      "description": "Find text files in current directory",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "tree",
+      "description": "Display directory tree",
+      "riskLevel": "SAFE",
+      "readonly": true
+    }
+  ],
+  "file_reading": [
+    {
+      "command": "cat README.md",
+      "description": "Display file contents",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "less /var/log/syslog",
+      "description": "View log file",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "head -n 10 file.txt",
+      "description": "Show first 10 lines",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "tail -f application.log",
+      "description": "Follow log file",
+      "riskLevel": "SAFE",
+      "readonly": true
+    }
+  ],
+  "system_info": [
+    {
+      "command": "pwd",
+      "description": "Print working directory",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "whoami",
+      "description": "Display current user",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "date",
+      "description": "Show current date/time",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "uptime",
+      "description": "Show system uptime",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "df -h",
+      "description": "Show disk usage",
+      "riskLevel": "SAFE",
+      "readonly": true
+    }
+  ],
+  "text_processing": [
+    {
+      "command": "grep 'error' logfile.txt",
+      "description": "Search for pattern in file",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "wc -l file.txt",
+      "description": "Count lines in file",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "sort names.txt",
+      "description": "Sort file contents",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "uniq duplicates.txt",
+      "description": "Remove duplicate lines",
+      "riskLevel": "SAFE",
+      "readonly": true
+    }
+  ],
+  "development_tools": [
+    {
+      "command": "git status",
+      "description": "Check git repository status",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "git log --oneline",
+      "description": "View git history",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "npm list",
+      "description": "List npm packages",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "python --version",
+      "description": "Check Python version",
+      "riskLevel": "SAFE",
+      "readonly": true
+    }
+  ],
+  "network_info": [
+    {
+      "command": "ping -c 4 google.com",
+      "description": "Test network connectivity",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "ifconfig",
+      "description": "Show network interfaces",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "netstat -an",
+      "description": "Show network connections",
+      "riskLevel": "SAFE",
+      "readonly": true
+    },
+    {
+      "command": "hostname",
+      "description": "Display system hostname",
+      "riskLevel": "SAFE",
+      "readonly": true
+    }
+  ]
+}

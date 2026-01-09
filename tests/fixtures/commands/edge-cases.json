@@ -1,0 +1,154 @@
+{
+  "context_dependent": [
+    {
+      "command": "rm *",
+      "contexts": {
+        "safe": {
+          "cwd": "/tmp/test-dir",
+          "description": "Remove files in temporary directory",
+          "riskLevel": "CAUTION"
+        },
+        "dangerous": {
+          "cwd": "/",
+          "description": "Remove all files in root",
+          "riskLevel": "CRITICAL"
+        }
+      }
+    },
+    {
+      "command": "chmod 755 .",
+      "contexts": {
+        "safe": {
+          "cwd": "/home/user/project",
+          "description": "Fix project permissions",
+          "riskLevel": "SAFE"
+        },
+        "dangerous": {
+          "cwd": "/etc",
+          "description": "Modify system config permissions",
+          "riskLevel": "HIGH"
+        }
+      }
+    }
+  ],
+  "ambiguous_commands": [
+    {
+      "command": "python script.py",
+      "description": "Could be safe or dangerous depending on script content",
+      "riskLevel": "CAUTION",
+      "analysis": "Requires script content analysis"
+    },
+    {
+      "command": "sh ./install.sh",
+      "description": "Installation script of unknown origin",
+      "riskLevel": "CAUTION",
+      "analysis": "Requires script inspection"
+    },
+    {
+      "command": "make install",
+      "description": "Could install system-wide or locally",
+      "riskLevel": "CAUTION",
+      "analysis": "Depends on Makefile content"
+    }
+  ],
+  "chained_commands": [
+    {
+      "command": "cd /tmp && rm -rf *",
+      "description": "Safe if chained correctly",
+      "riskLevel": "CAUTION",
+      "risks": ["Depends on cd success"]
+    },
+    {
+      "command": "git clean -fdx || rm -rf .",
+      "description": "Fallback could be dangerous",
+      "riskLevel": "HIGH",
+      "risks": ["Fallback command is destructive"]
+    },
+    {
+      "command": "test -d /backup || mkdir /backup && cp important.dat /backup/",
+      "description": "Complex conditional logic",
+      "riskLevel": "CAUTION",
+      "risks": ["Logic might not work as expected"]
+    }
+  ],
+  "special_characters": [
+    {
+      "command": "rm -rf $HOME/.cache/*",
+      "description": "Variable expansion",
+      "riskLevel": "CAUTION",
+      "risks": ["Depends on variable value"]
+    },
+    {
+      "command": "echo 'test' > file$(date +%s).txt",
+      "description": "Command substitution",
+      "riskLevel": "SAFE",
+      "risks": []
+    },
+    {
+      "command": "find . -name \"*.bak\" -exec rm {} \\;",
+      "description": "Find with exec",
+      "riskLevel": "CAUTION",
+      "risks": ["Executes rm for each file"]
+    }
+  ],
+  "sudo_variants": [
+    {
+      "command": "sudo -u postgres psql",
+      "description": "Switch to different user",
+      "riskLevel": "HIGH",
+      "risks": ["Database access"]
+    },
+    {
+      "command": "sudo -i",
+      "description": "Interactive root shell",
+      "riskLevel": "CRITICAL",
+      "risks": ["Full root access"]
+    },
+    {
+      "command": "sudo -E npm install",
+      "description": "Preserve environment",
+      "riskLevel": "HIGH",
+      "risks": ["Runs with elevated privileges"]
+    }
+  ],
+  "pipe_commands": [
+    {
+      "command": "ps aux | grep firefox | awk '{print $2}' | xargs kill",
+      "description": "Complex pipe to kill processes",
+      "riskLevel": "HIGH",
+      "risks": ["Could kill wrong processes"]
+    },
+    {
+      "command": "history | grep password",
+      "description": "Search command history",
+      "riskLevel": "CAUTION",
+      "risks": ["Might expose sensitive data"]
+    },
+    {
+      "command": "cat /dev/urandom | head -c 1000000 > bigfile",
+      "description": "Generate large file",
+      "riskLevel": "CAUTION",
+      "risks": ["Disk space usage"]
+    }
+  ],
+  "tricky_safe_commands": [
+    {
+      "command": "rm --help",
+      "description": "Just showing help",
+      "riskLevel": "SAFE",
+      "notes": "Contains 'rm' but is safe"
+    },
+    {
+      "command": "man chmod",
+      "description": "Reading manual",
+      "riskLevel": "SAFE",
+      "notes": "Contains 'chmod' but is safe"
+    },
+    {
+      "command": "echo 'sudo rm -rf /'",
+      "description": "Just echoing text",
+      "riskLevel": "SAFE",
+      "notes": "Contains dangerous pattern but doesn't execute"
+    }
+  ]
+}

@@ -1,0 +1,140 @@
+name: Claude Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  issue_comment:
+    types: [created]
+
+# Only allow one review per PR at a time
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Automatic review on PR open/update
+  auto-review:
+    name: Automatic PR Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            Review this pull request with focus on:
+
+            ## Security Review (CRITICAL for this project)
+            - Command injection vulnerabilities
+            - Path traversal risks
+            - Unsafe eval or shell execution
+            - Credential/secret handling
+            - Input validation gaps
+
+            ## Code Quality
+            - Logic errors and edge cases
+            - Error handling completeness
+            - Performance concerns
+            - Code clarity and maintainability
+
+            ## Project-Specific Checks (Deliberate Safety Layer)
+            - Pattern matcher regex correctness
+            - Classification accuracy (SAFE/MODERATE/DANGEROUS)
+            - Hook exit code handling (0=allow, 2=block)
+            - Deduplication state management
+            - LLM prompt injection risks
+
+            Be thorough but concise. Flag blocking issues clearly.
+          claude_args: --max-turns 3
+
+  # Interactive review when @claude is mentioned
+  interactive-review:
+    name: Interactive Review
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '@claude')
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Claude Interactive Response
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          claude_args: --max-turns 5
+
+  # Security-focused review for sensitive paths
+  security-review:
+    name: Security Review
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for sensitive file changes
+        id: check-sensitive
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          SENSITIVE_PATTERNS="hooks/|pattern-matcher|classifier|\.github/workflows"
+          CHANGED_FILES=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA" || echo "")
+          if echo "$CHANGED_FILES" | grep -qE "$SENSITIVE_PATTERNS"; then
+            echo "sensitive=true" >> "$GITHUB_OUTPUT"
+            echo "Sensitive files changed - triggering deep security review"
+          else
+            echo "sensitive=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Deep Security Review
+        if: steps.check-sensitive.outputs.sensitive == 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            SECURITY-FOCUSED REVIEW - Sensitive files changed!
+
+            This PR touches security-critical paths. Perform deep analysis:
+
+            1. **Pattern Matcher Changes**
+               - Are regex patterns safe from ReDoS?
+               - Do new patterns correctly classify commands?
+               - Any bypass possibilities?
+
+            2. **Hook Changes**
+               - Exit code handling correct?
+               - State file race conditions?
+               - Shell injection via user input?
+
+            3. **Workflow Changes**
+               - Least privilege permissions?
+               - No secrets in logs?
+               - Safe handling of PR context?
+
+            4. **Classifier Changes**
+               - Model loading security?
+               - Embedding comparison accuracy?
+
+            Block the PR if any security issues found.
+          claude_args: --max-turns 5

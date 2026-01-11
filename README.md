@@ -1,267 +1,128 @@
-# Deliberate 🛡️
+# Deliberate
 
-<p align="center">
-  <strong>Intelligent Command-Line Protection with Local AI</strong><br>
-  <em>Prevent costly mistakes before they happen</em>
-</p>
+A safety layer for AI coding agents.
 
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#usage">Usage</a> •
-  <a href="#configuration">Configuration</a> •
-  <a href="#security">Security</a> •
-  <a href="#contributing">Contributing</a>
-</p>
+## The Problem
 
----
+AI agents have access to your shell. They can run any command. Delete files. Exfiltrate credentials. Open reverse shells. The only guardrail: a yes/no prompt you'll inevitably approve on autopilot.
 
-Deliberate is an intelligent command-line safety tool that intercepts dangerous commands and provides AI-powered analysis using local LLMs. It acts as a protective layer between you and potentially destructive operations, ensuring commands are executed only with proper understanding and authorization.
+## The Solution
 
-## 🎯 Why Deliberate?
+Deliberate forces you to be deliberate. Every command gets classified and explained before execution:
 
-Every year, countless hours and valuable data are lost due to accidental command execution:
-- `rm -rf /` typed in the wrong directory
-- Production database deletions
-- Accidental cloud resource termination
-- Malicious script execution
+```
+[Bash] rm -rf node_modules
+🚨 [DANGEROUS] Recursively deletes the node_modules directory and all contents.
+> Allow? [y/n]
+```
 
-Deliberate prevents these disasters by:
-- **Intercepting dangerous commands** before execution
-- **Analyzing intent** with local AI models
-- **Requiring explicit confirmation** for risky operations
-- **Learning from your patterns** to reduce false positives
+The analysis persists after execution—no more vanishing prompts:
 
-## ✨ Features
+```
+🚨 DELIBERATE [DANGEROUS]
+    Recursively deletes the node_modules directory and all contents.
+```
 
-### 🧠 AI-Powered Analysis
-- **Local LLM Integration**: Uses Ollama with privacy-preserving local models
-- **Multi-Model Consensus**: Three specialized models analyze each command
-- **Context-Aware Decisions**: Understands command intent and potential impact
-- **Continuous Learning**: Improves accuracy based on your usage patterns
+Three risk levels:
+- ✅ **SAFE** — Read-only, no system changes
+- ⚡ **MODERATE** — Modifies files or services, reversible
+- 🚨 **DANGEROUS** — Destructive, credential access, network exfiltration
 
-### 🔒 Security First
-- **Advanced Bypass Prevention**: Detects and blocks circumvention attempts
-- **Command Integrity Verification**: Cryptographic signing of approved commands
-- **Sensitive Data Redaction**: Automatically redacts API keys, passwords, and PII
-- **Audit Logging**: Encrypted, tamper-proof audit trail
+Every command shows its analysis. You decide with context, not blind trust.
 
-### ⚡ Performance Optimized
-- **Fast Path for Safe Commands**: <10ms overhead for common operations
-- **Parallel Analysis Pipeline**: Concurrent processing for complex commands
-- **Intelligent Caching**: Remembers previous decisions
-- **Minimal System Impact**: Efficient resource usage
+## How It Works
 
-### 🔧 Enterprise Ready
-- **Centralized Configuration**: Organization-wide policies
-- **Threat Intelligence Integration**: Custom threat feeds
-- **Federated Learning**: Share insights without sharing data
-- **Compliance Support**: SOC2, HIPAA, PCI-DSS compatible
+Three layers, each serving a purpose:
 
-## 📦 Installation
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Layer 1: Pattern Matcher                                   │
+│           Regex rules. Deterministic. Can't be bypassed     │
+│           by prompt injection.                              │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 2: ML Classifier                                     │
+│           Semantic embeddings via CmdCaliper. Trained on    │
+│           712 labeled commands. Catches novel attacks.      │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 3: LLM Explainer                                     │
+│           Human-readable explanations. Uses your            │
+│           configured provider (Claude, Ollama, etc).        │
+└─────────────────────────────────────────────────────────────┘
+```
 
-### Prerequisites
-- Node.js 18.0.0 or higher
-- macOS, Linux, or WSL
-- (Optional) Ollama for AI features
+The AI agent can't explain away its own commands—the classifier runs independently.
 
-### Quick Install
+## Installation
+
 ```bash
 npm install -g deliberate
 deliberate install
 ```
 
-### Install with AI Features
+The installer walks you through LLM provider setup (Claude, Anthropic API, or Ollama).
+
+### Dependencies
+
+**Python 3.9+** with ML libraries:
+
 ```bash
-# First, install Ollama from https://ollama.ai
-# Then install Deliberate with AI models
-npm install -g deliberate
-deliberate install --with-ai
+pip install sentence-transformers scikit-learn numpy
 ```
 
-This will:
-1. Create command shims in `~/.deliberate/shims`
-2. Update your shell configuration
-3. Download required AI models (if --with-ai is used)
+The CmdCaliper embedding model (~419MB) downloads on first use.
 
-**Important**: Restart your shell or run:
+## CLI
+
 ```bash
-export PATH="$HOME/.deliberate/shims:$PATH"
+deliberate install          # Install hooks, configure LLM
+deliberate status           # Check installation
+deliberate classify "rm -rf /"   # Test classification → DANGEROUS
+deliberate serve            # Start classifier server (faster)
 ```
 
-## 🚀 Usage
+## Training
 
-### Basic Usage
-Once installed, Deliberate works transparently. Just use commands as normal:
+The classifier ships with 481 labeled examples: reverse shells, credential theft, cloud operations, container escapes, privilege escalation, and safe workflows.
+
+### Add Your Own
 
 ```bash
-# Safe commands pass through instantly
-ls -la  # ✓ No intervention needed
+# Add to training/expanded-command-safety.jsonl
+{"command": "...", "label": "DANGEROUS", "category": "..."}
 
-# Dangerous commands require approval
-rm -rf important_directory
-# 🛡️ Deliberate Security Analysis
-# Command: rm -rf important_directory
-# Risk Level: DANGEROUS
-# Reason: Recursively deletes directory and all contents
-# 
-# Do you want to proceed? [y/N]
+# Retrain
+python training/build_classifier.py --model base
 ```
 
-### AI Agent Interface
-For LLM agents that can't handle interactive prompts:
+### Active Learning
+
+Uncertain classifications get logged. Review and approve them:
 
 ```bash
-# First attempt generates an auth code
-deliberate ai rm /etc/hosts
-# 🤖 AI Agent Safety Analysis
-# This command will delete the system hosts file...
-# To execute deliberately, run:
-# deliberate ai fast-fox-1234 rm /etc/hosts
-
-# Use the auth code to execute
-deliberate ai fast-fox-1234 rm /etc/hosts
-# ✓ Auth code validated. Executing command...
+python training/approve_cases.py   # Review pending
+python training/build_classifier.py --model base  # Retrain
 ```
 
-### Command Management
+## Requirements
+
+- Node.js 18+
+- Python 3.9+
+- Claude Code (or any tool supporting Claude Code hooks)
+
+Works on macOS, Linux, and Windows.
+
+## Uninstall
 
 ```bash
-# Check installation status
-deliberate verify
-
-# Update safety patterns
-deliberate update
-
-# View configuration
-deliberate config show
-
-# Apply team policy
-deliberate config apply-policy /path/to/policy.yaml
-
-# Uninstall
 deliberate uninstall
 ```
 
-## ⚙️ Configuration
+## Acknowledgments
 
-Deliberate can be configured via `~/.deliberate/config.yaml`:
+Command embeddings by [CmdCaliper](https://huggingface.co/CyCraftAI/CmdCaliper-base) from CyCraft AI.
 
-```yaml
-version: "1.0.0"
+## License
 
-security:
-  enforcement_level: strict      # strict, moderate, permissive
-  bypass_prevention: true
-  require_tty: true
-  audit_logging: true
+Copyright © 2025 TheRadarTech LLC. All Rights Reserved.
 
-performance:
-  enable_fast_path: true
-  cache_size: 10000
-  parallel_analysis: true
-
-ai:
-  enable_llm_analysis: true
-  models:
-    primary: qwen2:1.5b
-    secondary: smollm2:1.7b
-    decision: deepseek-r1:1.5b
-  confidence_threshold: 0.7
-
-patterns:
-  custom_dangerous:
-    - "aws s3 rm.*--recursive"
-    - "kubectl delete namespace"
-  custom_safe:
-    - "npm run build"
-    - "yarn test"
-```
-
-### Team Policies
-
-Organizations can create policy files to enforce consistent safety standards:
-
-```yaml
-# organization-policy.yaml
-security:
-  enforcement_level: strict
-  
-patterns:
-  custom_dangerous:
-    - "terraform destroy"
-    - "DROP DATABASE"
-  whitelist_commands:
-    - "/opt/company/deploy.sh"
-
-notifications:
-  webhook_url: "https://hooks.slack.com/..."
-  alert_on_dangerous: true
-```
-
-Apply with: `deliberate config apply-policy organization-policy.yaml`
-
-## 🔒 Security
-
-### Bypass Prevention
-Deliberate implements multiple layers of security to prevent bypasses:
-- **TTY Detection**: Direct terminal access required, prevents `echo y | deliberate`
-- **Process Inspection**: Detects PTY wrappers like `script` and `expect`
-- **Environment Protection**: Blocks LD_PRELOAD and PATH manipulation
-- **Time-based Tokens**: Auth codes expire after 5 minutes
-
-### Privacy
-- **Local AI Models**: All AI analysis happens on your machine
-- **Sensitive Data Redaction**: Passwords, API keys, and personal info are never sent to AI
-- **Encrypted Audit Logs**: Logs are encrypted and tamper-proof
-
-### Threat Model
-Deliberate protects against:
-- Accidental command execution
-- Copy-paste mistakes
-- Malicious scripts
-- Compromised AI agents
-- Social engineering attacks
-
-## 📊 Performance
-
-Deliberate is designed for minimal overhead:
-- **Safe Commands**: <10ms overhead (often <5ms)
-- **Pattern Analysis**: <50ms for complex commands
-- **AI Analysis**: 200-500ms for full LLM consensus
-- **Memory Usage**: ~50MB baseline, +2GB with AI models
-
-## 🤝 Contributing
-
-We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
-
-### Development Setup
-```bash
-git clone https://github.com/yourusername/deliberate.git
-cd deliberate
-npm install
-npm run dev
-```
-
-### Running Tests
-```bash
-npm test                 # Unit tests
-npm run test:security    # Security tests
-npm run test:coverage    # Coverage report
-```
-
-## 📝 License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
-## 🙏 Acknowledgments
-
-- Built with [TypeScript](https://www.typescriptlang.org/) and [Node.js](https://nodejs.org/)
-- AI models from [Qwen](https://github.com/QwenLM/Qwen), [SmolLM](https://huggingface.co/HuggingFaceTB/SmolLM2-1.7B), and [DeepSeek](https://github.com/deepseek-ai/DeepSeek-LLM)
-- Inspired by `sudo` but for the AI age
-
----
-
-<p align="center">
-  <strong>Stay safe, stay deliberate 🛡️</strong>
-</p>
+This software is proprietary. See [LICENSE](LICENSE) for details.

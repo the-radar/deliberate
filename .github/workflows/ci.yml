@@ -25,11 +25,8 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          cache-dependency-path: packages/claude-code/package-lock.json
-
       - name: Install dependencies
         run: npm ci
-        working-directory: packages/claude-code
 
       - name: Verify package structure
         run: |
@@ -41,11 +38,9 @@ jobs:
           test -f hooks/deliberate-commands.py || { echo "Missing deliberate-commands.py"; exit 1; }
           test -f hooks/deliberate-changes.py || { echo "Missing deliberate-changes.py"; exit 1; }
           echo "✅ Package structure OK"
-        working-directory: packages/claude-code
 
       - name: Test CLI loads
         run: node bin/cli.js --help
-        working-directory: packages/claude-code
 
   # Ensure all jobs pass before merge
   ci-success:

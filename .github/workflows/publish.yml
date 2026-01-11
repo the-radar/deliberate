@@ -35,7 +35,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-        working-directory: packages/claude-code
 
       - name: Verify package version matches release tag
         env:
@@ -52,11 +51,9 @@ jobs:
             echo "::error::Package version ($PACKAGE_VERSION) does not match release tag ($TAG_VERSION)"
             exit 1
           fi
-        working-directory: packages/claude-code
 
       - name: Publish to npm
         run: npm publish --access public
-        working-directory: packages/claude-code
 
       - name: Verify publish
         env:

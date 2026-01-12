@@ -28,11 +28,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-        working-directory: packages/claude-code
 
       - name: Run npm audit
         run: npm audit --audit-level=high
-        working-directory: packages/claude-code
         continue-on-error: true
 
       - name: Check for critical vulnerabilities
@@ -47,7 +45,6 @@ jobs:
             echo "::error::Critical vulnerabilities found!"
             exit 1
           fi
-        working-directory: packages/claude-code
 
   # CodeQL analysis for JavaScript/TypeScript
   codeql:
@@ -101,8 +98,8 @@ jobs:
 
       - name: Run Bandit on hooks
         run: |
-          if [ -d "packages/claude-code/hooks" ]; then
-            bandit -r packages/claude-code/hooks -ll -ii
+          if [ -d "hooks" ]; then
+            bandit -r hooks -ll -ii
           else
             echo "No hooks directory found, skipping"
           fi
@@ -121,9 +118,7 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-        working-directory: packages/claude-code
 
       - name: Check licenses
         run: npx license-checker --onlyAllow "MIT;ISC;BSD-2-Clause;BSD-3-Clause;Apache-2.0;0BSD;CC0-1.0;Unlicense" --excludePrivatePackages
-        working-directory: packages/claude-code
         continue-on-error: true

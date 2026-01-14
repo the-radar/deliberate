@@ -47,8 +47,13 @@ def get_state_file(session_id: str) -> str:
     return os.path.expanduser(f"~/.claude/deliberate_cmd_state_{session_id}.json")
 
 
+def get_history_file(session_id: str) -> str:
+    """Get session-specific command history file path."""
+    return os.path.expanduser(f"~/.claude/deliberate_cmd_history_{session_id}.json")
+
+
 def cleanup_old_state_files():
-    """Remove state files older than 7 days (runs 10% of the time)."""
+    """Remove state and history files older than 7 days (runs 10% of the time)."""
     if random.random() > 0.1:
         return
     try:
@@ -58,6 +63,7 @@ def cleanup_old_state_files():
         current_time = datetime.now().timestamp()
         seven_days_ago = current_time - (7 * 24 * 60 * 60)
         for filename in os.listdir(state_dir):
+            # Clean up state files, history files, and cache files
             if filename.startswith("deliberate_") and filename.endswith(".json"):
                 file_path = os.path.join(state_dir, filename)
                 try:
@@ -79,6 +85,830 @@ def load_state(session_id: str) -> set:
         except (json.JSONDecodeError, IOError):
             return set()
     return set()
+
+
+# Workflow patterns that indicate dangerous sequences
+# Format: (pattern_name, required_commands, risk_level, description)
+WORKFLOW_PATTERNS = [
+    ("REPO_WIPE", ["git rm", "git push --force"], "CRITICAL",
+     "Repository wipe: removing files from git and force pushing rewrites history permanently"),
+    ("REPO_WIPE", ["rm -rf", "git add", "git push --force"], "CRITICAL",
+     "Repository restructure with force push: deleting files and force pushing can destroy code"),
+    ("MASS_DELETE", ["rm -rf", "rm -rf", "rm -rf"], "HIGH",
+     "Multiple recursive deletions in sequence - high risk of unintended data loss"),
+    ("HISTORY_REWRITE", ["git reset --hard", "git push --force"], "CRITICAL",
+     "History rewrite: hard reset + force push permanently destroys commit history"),
+    ("HISTORY_REWRITE", ["git rebase", "git push --force"], "CRITICAL",
+     "History rewrite: rebase + force push rewrites shared history"),
+    ("UNCOMMITTED_RISK", ["git stash", "git checkout", "rm"], "HIGH",
+     "Uncommitted changes at risk: stashing, switching branches, and deleting files"),
+    ("TEMP_SWAP", ["cp", "rm -rf", "cp"], "HIGH",
+     "Temp directory swap pattern: copying to temp, deleting original, copying back - easy to lose data"),
+    ("ENV_DESTRUCTION", ["unset", "rm .env"], "HIGH",
+     "Environment destruction: unsetting variables and deleting env files"),
+]
+
+
+def load_command_history(session_id: str) -> dict:
+    """Load command history for this session.
+
+    Returns dict with:
+    - commands: list of {command, risk, timestamp, explanation}
+    - cumulative_risk: current session risk level
+    - patterns_detected: list of detected workflow patterns
+    - files_at_risk: set of files that could be affected
+    """
+    history_file = get_history_file(session_id)
+    default_history = {
+        "commands": [],
+        "cumulative_risk": "LOW",
+        "patterns_detected": [],
+        "files_at_risk": []
+    }
+
+    if os.path.exists(history_file):
+        try:
+            with open(history_file, 'r') as f:
+                history = json.load(f)
+                # Ensure all keys exist
+                for key in default_history:
+                    if key not in history:
+                        history[key] = default_history[key]
+                return history
+        except (json.JSONDecodeError, IOError):
+            return default_history
+    return default_history
+
+
+def save_command_history(session_id: str, history: dict):
+    """Save command history for this session."""
+    history_file = get_history_file(session_id)
+    try:
+        os.makedirs(os.path.dirname(history_file), exist_ok=True)
+        with open(history_file, 'w') as f:
+            json.dump(history, f, indent=2)
+    except IOError:
+        pass
+
+
+def extract_affected_paths(command: str) -> list:
+    """Extract file/directory paths that could be affected by a command.
+
+    Looks for paths in common destructive commands like rm, mv, cp, git rm, etc.
+    """
+    import re
+    paths = []
+
+    # Patterns for extracting paths from various commands
+    # rm -rf /path or rm -rf path
+    rm_match = re.findall(r'rm\s+(?:-[rfivd]+\s+)*([^\s|;&>]+)', command)
+    paths.extend(rm_match)
+
+    # git rm -rf path
+    git_rm_match = re.findall(r'git\s+rm\s+(?:-[rf]+\s+)*([^\s|;&>]+)', command)
+    paths.extend(git_rm_match)
+
+    # mv source dest - source is at risk
+    mv_match = re.findall(r'mv\s+(?:-[fiv]+\s+)*([^\s|;&>]+)\s+', command)
+    paths.extend(mv_match)
+
+    # Filter out flags and special chars
+    paths = [p for p in paths if not p.startswith('-') and p not in ['.', '..', '/']]
+
+    return paths
+
+
+def detect_workflow_patterns(history: dict, current_command: str, window_size: int = 3) -> list:
+    """Detect dangerous workflow patterns from recent command history + current command.
+
+    Uses a sliding window to only look at the last N commands, avoiding stale pattern
+    matches from old commands that are no longer relevant to the current context.
+
+    Args:
+        history: Command history dict with "commands" list
+        current_command: The command being analyzed
+        window_size: Number of recent commands to consider (default 3)
+
+    Returns list of (pattern_name, risk_level, description) for detected patterns.
+    """
+    detected = []
+
+    # Only look at the last N commands (sliding window)
+    all_history_commands = [cmd["command"] for cmd in history.get("commands", [])]
+    recent_commands = all_history_commands[-window_size:] if all_history_commands else []
+    recent_commands.append(current_command)
+
+    # Check each workflow pattern against recent commands only
+    for pattern_name, required_cmds, risk_level, description in WORKFLOW_PATTERNS:
+        # Check if all required command patterns appear in sequence within the window
+        found_all = True
+        last_idx = -1
+
+        for required in required_cmds:
+            found_this = False
+            for idx, cmd in enumerate(recent_commands):
+                if idx > last_idx and required.lower() in cmd.lower():
+                    found_this = True
+                    last_idx = idx
+                    break
+
+            if not found_this:
+                found_all = False
+                break
+
+        if found_all:
+            detected.append((pattern_name, risk_level, description))
+
+    return detected
+
+
+def calculate_cumulative_risk(history: dict, current_risk: str) -> str:
+    """Calculate cumulative session risk based on history and current command.
+
+    Risk escalates based on:
+    - Number of DANGEROUS commands
+    - Detected workflow patterns
+    - Files at risk
+    """
+    risk_levels = {"LOW": 0, "MODERATE": 1, "HIGH": 2, "CRITICAL": 3}
+
+    # Start with current command's risk
+    max_risk = risk_levels.get(current_risk, 1)
+
+    # Check historical risks
+    dangerous_count = 0
+    for cmd in history.get("commands", []):
+        cmd_risk = cmd.get("risk", "MODERATE")
+        if cmd_risk == "DANGEROUS":
+            dangerous_count += 1
+        max_risk = max(max_risk, risk_levels.get(cmd_risk, 1))
+
+    # Escalate based on dangerous command count
+    if dangerous_count >= 3:
+        max_risk = max(max_risk, risk_levels["HIGH"])
+    if dangerous_count >= 5:
+        max_risk = max(max_risk, risk_levels["CRITICAL"])
+
+    # Check for detected patterns
+    for pattern in history.get("patterns_detected", []):
+        pattern_risk = pattern[1] if len(pattern) > 1 else "HIGH"
+        max_risk = max(max_risk, risk_levels.get(pattern_risk, 2))
+
+    # Convert back to string
+    for name, level in risk_levels.items():
+        if level == max_risk:
+            return name
+
+    return "MODERATE"
+
+
+def get_destruction_consequences(command: str, cwd: str = ".") -> dict | None:
+    """Analyze what a destructive command will actually delete/modify.
+
+    Returns dict with:
+    - files: list of files that will be affected
+    - dirs: list of directories that will be affected
+    - total_lines: estimated lines of code at risk
+    - total_size: total size in bytes
+    - warning: human-readable consequence summary
+    - type: the type of destruction (rm, git_reset, git_clean, etc.)
+
+    Returns None if command is not destructive or paths don't exist.
+    """
+    import re
+    import subprocess
+
+    consequences = {
+        "files": [],
+        "dirs": [],
+        "total_lines": 0,
+        "total_size": 0,
+        "warning": "",
+        "type": None
+    }
+
+    # Check for git reset --hard (discards uncommitted changes)
+    if re.search(r'git\s+reset\s+--hard', command):
+        return _analyze_git_reset_hard(cwd, consequences)
+
+    # Check for git clean (removes untracked files)
+    if re.search(r'git\s+clean', command):
+        return _analyze_git_clean(cwd, consequences)
+
+    # Check for git checkout -- (discards uncommitted changes to tracked files)
+    if re.search(r'git\s+checkout\s+--', command) or re.search(r'git\s+checkout\s+\.\s*$', command):
+        return _analyze_git_checkout_discard(cwd, consequences)
+
+    # Check for git stash drop (permanently deletes stashed changes)
+    if re.search(r'git\s+stash\s+drop', command):
+        return _analyze_git_stash_drop(cwd, command, consequences)
+
+    # Detect rm commands and extract targets
+    rm_pattern = r'rm\s+(?:-[rfivd]+\s+)*(.+?)(?:\s*[|;&>]|$)'
+    rm_match = re.search(rm_pattern, command)
+
+    # Detect git rm commands
+    git_rm_pattern = r'git\s+rm\s+(?:-[rf]+\s+)*(.+?)(?:\s*[|;&>]|$)'
+    git_rm_match = re.search(git_rm_pattern, command)
+
+    targets = []
+    if rm_match:
+        # Split by spaces but respect quotes
+        target_str = rm_match.group(1).strip()
+        targets = target_str.split()
+        consequences["type"] = "rm"
+    elif git_rm_match:
+        target_str = git_rm_match.group(1).strip()
+        targets = target_str.split()
+        consequences["type"] = "git_rm"
+
+    if not targets:
+        return None
+
+    # Analyze each target
+    for target in targets:
+        if target.startswith('-'):
+            continue  # Skip flags
+
+        # Expand path relative to cwd
+        if not os.path.isabs(target):
+            target = os.path.join(cwd, target)
+        target = os.path.expanduser(target)
+
+        # Handle glob patterns
+        if '*' in target or '?' in target:
+            import glob
+            expanded = glob.glob(target, recursive=True)
+            for path in expanded:
+                _analyze_path(path, consequences)
+        elif os.path.exists(target):
+            _analyze_path(target, consequences)
+
+    # Generate warning message
+    if consequences["files"] or consequences["dirs"]:
+        file_count = len(consequences["files"])
+        dir_count = len(consequences["dirs"])
+        lines = consequences["total_lines"]
+        size_kb = consequences["total_size"] / 1024
+
+        parts = []
+        if file_count:
+            parts.append(f"{file_count} file{'s' if file_count > 1 else ''}")
+        if dir_count:
+            parts.append(f"{dir_count} director{'ies' if dir_count > 1 else 'y'}")
+
+        consequences["warning"] = f"⚠️  WILL DELETE: {', '.join(parts)}"
+        if lines > 0:
+            consequences["warning"] += f" ({lines:,} lines of code)"
+        if size_kb > 1:
+            consequences["warning"] += f" [{size_kb:.1f} KB]"
+
+        # Show preview of what will be deleted
+        preview_files = consequences["files"][:10]
+        if preview_files:
+            consequences["warning"] += "\n    Files:"
+            for f in preview_files:
+                consequences["warning"] += f"\n      - {f}"
+            if len(consequences["files"]) > 10:
+                consequences["warning"] += f"\n      ... and {len(consequences['files']) - 10} more"
+
+        return consequences
+
+    return None
+
+
+def _analyze_path(path: str, consequences: dict):
+    """Helper to analyze a single path and add to consequences."""
+    try:
+        if os.path.isfile(path):
+            consequences["files"].append(path)
+            size = os.path.getsize(path)
+            consequences["total_size"] += size
+
+            # Count lines for text files
+            if _is_text_file(path):
+                try:
+                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = sum(1 for _ in f)
+                        consequences["total_lines"] += lines
+                except (IOError, PermissionError):
+                    pass
+
+        elif os.path.isdir(path):
+            consequences["dirs"].append(path)
+            # Walk directory to count contents
+            for root, _dirs, files in os.walk(path):
+                for filename in files:
+                    filepath = os.path.join(root, filename)
+                    try:
+                        consequences["files"].append(filepath)
+                        size = os.path.getsize(filepath)
+                        consequences["total_size"] += size
+
+                        if _is_text_file(filepath):
+                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                lines = sum(1 for _ in f)
+                                consequences["total_lines"] += lines
+                    except (IOError, PermissionError, OSError):
+                        pass
+    except (OSError, PermissionError):
+        pass
+
+
+def _analyze_git_reset_hard(cwd: str, consequences: dict) -> dict | None:
+    """Analyze what git reset --hard will discard.
+
+    Runs git diff HEAD to see uncommitted changes that will be lost.
+    """
+    import subprocess
+
+    consequences["type"] = "git_reset_hard"
+
+    try:
+        # Get list of modified files
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, timeout=10, cwd=cwd
+        )
+
+        if status_result.returncode != 0:
+            return None  # Not a git repo
+
+        if not status_result.stdout.strip():
+            return None  # No uncommitted changes, reset is safe
+
+        # Parse modified files
+        for line in status_result.stdout.strip().split('\n'):
+            if len(line) >= 3:
+                status = line[:2]
+                filepath = line[3:].strip()
+
+                # Handle renamed files (R  old -> new)
+                if ' -> ' in filepath:
+                    filepath = filepath.split(' -> ')[1]
+
+                full_path = os.path.join(cwd, filepath)
+
+                # M = modified, A = added, D = deleted, ? = untracked
+                if status[0] in 'MA' or status[1] in 'MA':
+                    consequences["files"].append(filepath)
+                    if os.path.exists(full_path):
+                        try:
+                            size = os.path.getsize(full_path)
+                            consequences["total_size"] += size
+                            if _is_text_file(full_path):
+                                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                    lines = sum(1 for _ in f)
+                                    consequences["total_lines"] += lines
+                        except (IOError, OSError):
+                            pass
+
+        # Get actual diff to show what changes will be lost
+        diff_result = subprocess.run(
+            ["git", "diff", "HEAD", "--stat"],
+            capture_output=True, text=True, timeout=10, cwd=cwd
+        )
+
+        if not consequences["files"]:
+            return None
+
+        # Build warning message
+        file_count = len(consequences["files"])
+        lines = consequences["total_lines"]
+
+        consequences["warning"] = f"⚠️  UNCOMMITTED CHANGES WILL BE DISCARDED: {file_count} file{'s' if file_count > 1 else ''}"
+        if lines > 0:
+            consequences["warning"] += f" ({lines:,} lines of changes)"
+
+        consequences["warning"] += "\n    Modified files:"
+        for f in consequences["files"][:10]:
+            consequences["warning"] += f"\n      - {f}"
+        if len(consequences["files"]) > 10:
+            consequences["warning"] += f"\n      ... and {len(consequences['files']) - 10} more"
+
+        if diff_result.stdout:
+            # Add the stat summary
+            stat_lines = diff_result.stdout.strip().split('\n')
+            if stat_lines:
+                consequences["warning"] += f"\n\n    {stat_lines[-1]}"  # Summary line like "5 files changed, 120 insertions(+), 30 deletions(-)"
+
+        return consequences
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def _analyze_git_clean(cwd: str, consequences: dict) -> dict | None:
+    """Analyze what git clean will remove.
+
+    Runs git clean -n (dry run) to preview what would be deleted.
+    """
+    import subprocess
+
+    consequences["type"] = "git_clean"
+
+    try:
+        # Dry run to see what would be removed
+        # -d includes directories, -f is required, -n is dry run
+        clean_result = subprocess.run(
+            ["git", "clean", "-dfn"],
+            capture_output=True, text=True, timeout=10, cwd=cwd
+        )
+
+        if clean_result.returncode != 0:
+            return None
+
+        if not clean_result.stdout.strip():
+            return None  # Nothing to clean
+
+        # Parse output: "Would remove path/to/file"
+        for line in clean_result.stdout.strip().split('\n'):
+            if line.startswith("Would remove "):
+                filepath = line[len("Would remove "):].strip()
+                full_path = os.path.join(cwd, filepath)
+
+                if os.path.isdir(full_path):
+                    consequences["dirs"].append(filepath)
+                    # Count files in directory
+                    for root, _dirs, files in os.walk(full_path):
+                        for filename in files:
+                            fpath = os.path.join(root, filename)
+                            consequences["files"].append(fpath)
+                            try:
+                                consequences["total_size"] += os.path.getsize(fpath)
+                                if _is_text_file(fpath):
+                                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
+                                        consequences["total_lines"] += sum(1 for _ in f)
+                            except (IOError, OSError):
+                                pass
+                else:
+                    consequences["files"].append(filepath)
+                    if os.path.exists(full_path):
+                        try:
+                            consequences["total_size"] += os.path.getsize(full_path)
+                            if _is_text_file(full_path):
+                                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                    consequences["total_lines"] += sum(1 for _ in f)
+                        except (IOError, OSError):
+                            pass
+
+        if not consequences["files"] and not consequences["dirs"]:
+            return None
+
+        # Build warning
+        file_count = len(consequences["files"])
+        dir_count = len(consequences["dirs"])
+        lines = consequences["total_lines"]
+
+        consequences["warning"] = f"⚠️  UNTRACKED FILES WILL BE DELETED: {file_count} file{'s' if file_count != 1 else ''}"
+        if dir_count:
+            consequences["warning"] += f", {dir_count} director{'ies' if dir_count != 1 else 'y'}"
+        if lines > 0:
+            consequences["warning"] += f" ({lines:,} lines)"
+
+        consequences["warning"] += "\n    Will remove:"
+        for f in consequences["files"][:10]:
+            consequences["warning"] += f"\n      - {f}"
+        if len(consequences["files"]) > 10:
+            consequences["warning"] += f"\n      ... and {len(consequences['files']) - 10} more"
+
+        return consequences
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def _analyze_git_checkout_discard(cwd: str, consequences: dict) -> dict | None:
+    """Analyze what git checkout -- will discard.
+
+    Shows modified tracked files that will lose their changes.
+    """
+    import subprocess
+
+    consequences["type"] = "git_checkout_discard"
+
+    try:
+        # Get modified files (not staged)
+        diff_result = subprocess.run(
+            ["git", "diff", "--name-only"],
+            capture_output=True, text=True, timeout=10, cwd=cwd
+        )
+
+        if diff_result.returncode != 0:
+            return None
+
+        if not diff_result.stdout.strip():
+            return None  # No modifications to discard
+
+        for filepath in diff_result.stdout.strip().split('\n'):
+            filepath = filepath.strip()
+            if not filepath:
+                continue
+
+            consequences["files"].append(filepath)
+            full_path = os.path.join(cwd, filepath)
+
+            if os.path.exists(full_path):
+                try:
+                    consequences["total_size"] += os.path.getsize(full_path)
+                    if _is_text_file(full_path):
+                        with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            consequences["total_lines"] += sum(1 for _ in f)
+                except (IOError, OSError):
+                    pass
+
+        if not consequences["files"]:
+            return None
+
+        # Get diff stat for summary
+        stat_result = subprocess.run(
+            ["git", "diff", "--stat"],
+            capture_output=True, text=True, timeout=10, cwd=cwd
+        )
+
+        file_count = len(consequences["files"])
+        consequences["warning"] = f"⚠️  UNCOMMITTED CHANGES WILL BE DISCARDED: {file_count} file{'s' if file_count != 1 else ''}"
+
+        consequences["warning"] += "\n    Modified files:"
+        for f in consequences["files"][:10]:
+            consequences["warning"] += f"\n      - {f}"
+        if len(consequences["files"]) > 10:
+            consequences["warning"] += f"\n      ... and {len(consequences['files']) - 10} more"
+
+        if stat_result.stdout:
+            stat_lines = stat_result.stdout.strip().split('\n')
+            if stat_lines:
+                consequences["warning"] += f"\n\n    {stat_lines[-1]}"
+
+        return consequences
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def _analyze_git_stash_drop(cwd: str, command: str, consequences: dict) -> dict | None:
+    """Analyze what git stash drop will permanently delete.
+
+    Shows the content of the stash being dropped.
+    """
+    import subprocess
+    import re
+
+    consequences["type"] = "git_stash_drop"
+
+    try:
+        # Parse which stash is being dropped (default is stash@{0})
+        stash_ref = "stash@{0}"
+        match = re.search(r'stash@\{(\d+)\}', command)
+        if match:
+            stash_ref = f"stash@{{{match.group(1)}}}"
+
+        # Get stash info
+        show_result = subprocess.run(
+            ["git", "stash", "show", "--stat", stash_ref],
+            capture_output=True, text=True, timeout=10, cwd=cwd
+        )
+
+        if show_result.returncode != 0:
+            return None  # Stash doesn't exist
+
+        # Parse files from stash show output
+        for line in show_result.stdout.strip().split('\n'):
+            # Lines look like: " file.txt | 10 +++---"
+            if '|' in line:
+                filepath = line.split('|')[0].strip()
+                if filepath:
+                    consequences["files"].append(filepath)
+
+        if not consequences["files"]:
+            return None
+
+        file_count = len(consequences["files"])
+        consequences["warning"] = f"⚠️  STASH WILL BE PERMANENTLY DELETED: {stash_ref} ({file_count} file{'s' if file_count != 1 else ''})"
+
+        consequences["warning"] += "\n    Stashed changes:"
+        for f in consequences["files"][:10]:
+            consequences["warning"] += f"\n      - {f}"
+        if len(consequences["files"]) > 10:
+            consequences["warning"] += f"\n      ... and {len(consequences['files']) - 10} more"
+
+        # Add the stat summary
+        stat_lines = show_result.stdout.strip().split('\n')
+        if stat_lines:
+            consequences["warning"] += f"\n\n    {stat_lines[-1]}"
+
+        return consequences
+
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+
+
+def _is_text_file(path: str) -> bool:
+    """Check if file is likely a text/code file based on extension."""
+    text_extensions = {
+        '.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.yaml', '.yml',
+        '.md', '.txt', '.sh', '.bash', '.zsh', '.fish',
+        '.html', '.css', '.scss', '.sass', '.less',
+        '.java', '.kt', '.scala', '.go', '.rs', '.rb', '.php',
+        '.c', '.cpp', '.h', '.hpp', '.cs', '.swift', '.m',
+        '.sql', '.graphql', '.proto', '.xml', '.toml', '.ini', '.cfg',
+        '.env', '.gitignore', '.dockerignore', 'Makefile', 'Dockerfile',
+        '.vue', '.svelte', '.astro'
+    }
+    _, ext = os.path.splitext(path)
+    return ext.lower() in text_extensions or os.path.basename(path) in text_extensions
+
+
+def get_backup_dir() -> str:
+    """Get the Deliberate backup directory."""
+    return os.path.expanduser("~/.deliberate/backups")
+
+
+def create_pre_destruction_backup(
+    session_id: str,
+    command: str,
+    cwd: str,
+    consequences: dict | None,
+    history: dict | None
+) -> str | None:
+    """Create automatic backup before CRITICAL operations.
+
+    Backs up:
+    - Files that will be affected (if consequences provided)
+    - Current git state (branch, uncommitted changes)
+    - Session command history (for context)
+
+    Returns backup path if successful, None if backup failed/skipped.
+    """
+    import shutil
+    import subprocess
+
+    backup_base = get_backup_dir()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Create project-specific backup dir
+    project_name = os.path.basename(cwd) or "unknown"
+    backup_dir = os.path.join(backup_base, project_name, timestamp)
+
+    try:
+        os.makedirs(backup_dir, exist_ok=True)
+
+        # 1. Track file mappings for restore
+        file_mappings = []  # {"original": absolute path, "backup": relative path in backup}
+
+        # 2. Backup files at risk (if we have them)
+        if consequences and consequences.get("files"):
+            files_dir = os.path.join(backup_dir, "files")
+            os.makedirs(files_dir, exist_ok=True)
+
+            backed_up = 0
+            for filepath in consequences["files"][:100]:  # Limit to 100 files
+                # Resolve to absolute path
+                if os.path.isabs(filepath):
+                    abs_path = filepath
+                else:
+                    abs_path = os.path.join(cwd, filepath)
+
+                if os.path.exists(abs_path) and os.path.isfile(abs_path):
+                    try:
+                        # Preserve directory structure relative to cwd
+                        rel_path = os.path.relpath(abs_path, cwd)
+                        dest_path = os.path.join(files_dir, rel_path)
+                        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                        shutil.copy2(abs_path, dest_path)
+
+                        # Track mapping for restore
+                        file_mappings.append({
+                            "original": abs_path,
+                            "backup": os.path.join("files", rel_path)
+                        })
+                        backed_up += 1
+                    except (IOError, OSError, shutil.Error):
+                        pass
+
+            debug(f"Backed up {backed_up} files to {files_dir}")
+
+        # 3. Save metadata with file mappings for restore
+        metadata = {
+            "timestamp": datetime.now().isoformat(),
+            "session_id": session_id,
+            "command": command,
+            "cwd": cwd,
+            "consequences": consequences,
+            "history": history,
+            "file_mappings": file_mappings,  # For restore: original path -> backup path
+            "version": "2.0"  # Metadata format version
+        }
+        with open(os.path.join(backup_dir, "metadata.json"), 'w') as f:
+            json.dump(metadata, f, indent=2)
+
+        # 3. Capture git state if in a repo
+        git_dir = os.path.join(backup_dir, "git_state")
+        os.makedirs(git_dir, exist_ok=True)
+
+        try:
+            # Get current branch
+            branch_result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=5, cwd=cwd
+            )
+            if branch_result.returncode == 0:
+                with open(os.path.join(git_dir, "branch.txt"), 'w') as f:
+                    f.write(branch_result.stdout.strip())
+
+            # Get current commit
+            commit_result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                capture_output=True, text=True, timeout=5, cwd=cwd
+            )
+            if commit_result.returncode == 0:
+                with open(os.path.join(git_dir, "commit.txt"), 'w') as f:
+                    f.write(commit_result.stdout.strip())
+
+            # Get status
+            status_result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                capture_output=True, text=True, timeout=10, cwd=cwd
+            )
+            if status_result.returncode == 0:
+                with open(os.path.join(git_dir, "status.txt"), 'w') as f:
+                    f.write(status_result.stdout)
+
+            # Get diff of uncommitted changes
+            diff_result = subprocess.run(
+                ["git", "diff", "HEAD"],
+                capture_output=True, text=True, timeout=30, cwd=cwd
+            )
+            if diff_result.returncode == 0 and diff_result.stdout:
+                with open(os.path.join(git_dir, "uncommitted.diff"), 'w') as f:
+                    f.write(diff_result.stdout)
+
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            debug("Git state capture skipped (not a git repo or git unavailable)")
+
+        debug(f"Created backup at {backup_dir}")
+        return backup_dir
+
+    except Exception as e:
+        debug(f"Backup failed: {e}")
+        return None
+
+
+def load_backup_config() -> dict:
+    """Load backup configuration from config file."""
+    try:
+        config_path = Path(CONFIG_FILE)
+        if config_path.exists():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                backup = config.get("backup", {})
+                return {
+                    "enabled": backup.get("enabled", True),  # Enabled by default
+                    "maxBackups": backup.get("maxBackups", 50),
+                    "riskThreshold": backup.get("riskThreshold", "CRITICAL")  # Only backup for CRITICAL by default
+                }
+    except Exception:
+        pass
+    return {"enabled": True, "maxBackups": 50, "riskThreshold": "CRITICAL"}
+
+
+def add_command_to_history(session_id: str, command: str, risk: str, explanation: str):
+    """Add a command to session history and update cumulative analysis."""
+    history = load_command_history(session_id)
+
+    # Add command entry
+    history["commands"].append({
+        "command": command[:500],  # Truncate long commands
+        "risk": risk,
+        "explanation": explanation[:200] if explanation else "",
+        "timestamp": datetime.now().isoformat()
+    })
+
+    # Keep only last 50 commands to prevent unbounded growth
+    if len(history["commands"]) > 50:
+        history["commands"] = history["commands"][-50:]
+
+    # Detect workflow patterns
+    patterns = detect_workflow_patterns(history, command)
+    if patterns:
+        for pattern in patterns:
+            if pattern not in history["patterns_detected"]:
+                history["patterns_detected"].append(pattern)
+
+    # Update cumulative risk
+    history["cumulative_risk"] = calculate_cumulative_risk(history, risk)
+
+    # Track files at risk
+    affected_paths = extract_affected_paths(command)
+    for path in affected_paths:
+        if path not in history["files_at_risk"]:
+            history["files_at_risk"].append(path)
+
+    # Keep files_at_risk bounded
+    if len(history["files_at_risk"]) > 100:
+        history["files_at_risk"] = history["files_at_risk"][-100:]
+
+    save_command_history(session_id, history)
 
 
 def save_state(session_id: str, shown_warnings: set):
@@ -685,6 +1515,40 @@ def main():
         debug(f"Skipping trivial command: {command[:50]}")
         sys.exit(0)
 
+    # Check command history for workflow patterns BEFORE individual analysis
+    # Uses sliding window (default 3 commands) to avoid stale pattern matches
+    history = load_command_history(session_id)
+    workflow_patterns = detect_workflow_patterns(history, command)
+
+    # Check for destruction consequences
+    cwd = input_data.get("cwd", os.getcwd())
+    destruction_consequences = get_destruction_consequences(command, cwd)
+
+    # If we detect a dangerous workflow pattern, escalate immediately
+    workflow_warning = ""
+    workflow_risk_escalation = None  # Track if we need to escalate risk due to workflow
+    if workflow_patterns:
+        for pattern_name, pattern_risk, pattern_desc in workflow_patterns:
+            workflow_warning += f"\n\n⚠️  WORKFLOW PATTERN DETECTED: {pattern_name} [{pattern_risk}]\n"
+            workflow_warning += f"    {pattern_desc}\n"
+            workflow_warning += f"    Session commands: {len(history['commands'])} | Cumulative risk: {history['cumulative_risk']}"
+
+            # Track highest workflow risk for potential escalation
+            if workflow_risk_escalation is None or pattern_risk == "CRITICAL":
+                workflow_risk_escalation = pattern_risk
+
+            # Show files at risk if we have them
+            if history.get("files_at_risk"):
+                files_preview = history["files_at_risk"][:5]
+                workflow_warning += f"\n    Files at risk: {', '.join(files_preview)}"
+                if len(history["files_at_risk"]) > 5:
+                    workflow_warning += f" (+{len(history['files_at_risk']) - 5} more)"
+
+    # Build destruction warning from consequences (already computed above)
+    destruction_warning = ""
+    if destruction_consequences and destruction_consequences.get("warning"):
+        destruction_warning = f"\n\n{destruction_consequences['warning']}"
+
     # Layer 1: Try classifier server first (pattern + ML) for risk level
     classifier_result = call_classifier(command)
 
@@ -738,19 +1602,8 @@ def main():
             risk = llm_result["risk"]
         explanation = llm_result["explanation"]
 
-    # Session deduplication - check if we've already warned about this command
-    if load_dedup_config():
-        warning_key = get_warning_key(command)
-        shown_warnings = load_state(session_id)
-
-        if warning_key in shown_warnings:
-            # Already shown this warning in this session - allow without re-prompting
-            debug(f"Deduplicated: {warning_key} already shown this session")
-            sys.exit(0)
-
-        # Mark as shown and save state
-        shown_warnings.add(warning_key)
-        save_state(session_id, shown_warnings)
+    # NOTE: Deduplication is handled AFTER block/allow decision
+    # We moved it below to prevent blocked commands from being allowed on retry
 
     # Cache result for PostToolUse to display (persistent after execution)
     # This ensures analysis is visible even after PreToolUse prompt disappears
@@ -763,10 +1616,33 @@ def main():
         "llm_unavailable_warning": llm_unavailable_warning
     })
 
+    # Add command to session history for workflow tracking
+    add_command_to_history(session_id, command, risk or "MODERATE", explanation or "")
+
     # SAFE commands: auto-allow, PostToolUse will show info after execution
-    if risk == "SAFE":
+    # UNLESS a workflow pattern was detected - then we still need to warn
+    if risk == "SAFE" and not workflow_patterns:
         debug(f"Auto-allowing SAFE command, cached for PostToolUse")
         sys.exit(0)
+
+    # Trigger automatic backup for ANY destructive command (catch-all safety net)
+    backup_config = load_backup_config()
+    backup_path = None
+    if backup_config.get("enabled", True):
+        # Backup if we detected any destruction consequences - this is the catch-all
+        # Regardless of risk level, if files will be deleted, back them up first
+        should_backup = destruction_consequences is not None and (
+            destruction_consequences.get("files") or
+            destruction_consequences.get("dirs")
+        )
+
+        if should_backup:
+            backup_path = create_pre_destruction_backup(
+                session_id, command, cwd,
+                destruction_consequences, history
+            )
+            if backup_path:
+                debug(f"Created pre-destruction backup at: {backup_path}")
 
     # Auto-block DANGEROUS commands when both classifier AND LLM agree
     # This catches truly malicious commands like `rm -rf /` or malicious scripts
@@ -809,8 +1685,44 @@ def main():
     # Color the explanation text so it's not easy to skip
     reason = f"{emoji} {BOLD}{CYAN}DELIBERATE{RESET} {BOLD}{color}[{risk}]{RESET}\n    {color}{explanation}{RESET}{llm_unavailable_warning}"
 
+    # Add workflow warning if patterns were detected
+    if workflow_warning:
+        reason += f"\n{RED}{workflow_warning}{RESET}"
+
+    # Add destruction consequences if we have them
+    if destruction_warning:
+        reason += f"\n{RED}{destruction_warning}{RESET}"
+
+    # Add backup notification if we created one
+    backup_notice = ""
+    if backup_path:
+        backup_notice = f"\n\n💾 Auto-backup created: {backup_path}"
+        reason += f"\n{GREEN}{backup_notice}{RESET}"
+
     # For Claude's context (shown in conversation)
     context = f"**Deliberate** [{risk}]: {explanation}{llm_unavailable_warning}"
+    if workflow_warning:
+        # Strip ANSI codes for Claude's context
+        context += workflow_warning
+    if destruction_warning:
+        context += destruction_warning
+    if backup_notice:
+        context += backup_notice
+
+    # Session deduplication - only for "ask" commands (not blocked ones)
+    # This prevents showing the same warning twice in a session
+    if load_dedup_config():
+        warning_key = get_warning_key(command)
+        shown_warnings = load_state(session_id)
+
+        if warning_key in shown_warnings:
+            # Already shown this warning in this session - allow without re-prompting
+            debug(f"Deduplicated: {warning_key} already shown this session")
+            sys.exit(0)
+
+        # Mark as shown and save state
+        shown_warnings.add(warning_key)
+        save_state(session_id, shown_warnings)
 
     output = {
         "hookSpecificOutput": {

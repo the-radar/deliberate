@@ -32,7 +32,7 @@ Every command shows its analysis. You decide with context, not blind trust.
 
 ## How It Works
 
-Three layers, each serving a purpose:
+Four layers, each serving a purpose:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -47,10 +47,62 @@ Three layers, each serving a purpose:
 │  Layer 3: LLM Explainer                                     │
 │           Human-readable explanations. Uses your            │
 │           configured provider (Claude, Ollama, etc).        │
+├─────────────────────────────────────────────────────────────┤
+│  Layer 4: Catch-All Backup                                  │
+│           Automatic backup before ANY destructive command.  │
+│           Files recoverable even if you approve by mistake. │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 The AI agent can't explain away its own commands—the classifier runs independently.
+
+## Workflow Detection
+
+Individual commands can look safe while the sequence is catastrophic. Deliberate tracks command history within sessions and detects dangerous patterns:
+
+| Pattern | What It Detects |
+|---------|-----------------|
+| REPO_WIPE | rm + git rm + force push |
+| MASS_DELETE | 3+ rm commands in sequence |
+| HISTORY_REWRITE | git reset --hard + force push |
+| TEMP_SWAP | copy to temp, delete original, copy back |
+
+When a pattern is detected, you see the full context—not just the current command.
+
+## Consequence Visualization
+
+Before destructive commands run, you see exactly what will be affected:
+
+```
+⚠️  WILL DELETE: 17 files, 2 directories (2,847 lines of code) [156.3 KB]
+    Files:
+      - src/ai/deliberate-ai.ts
+      - src/core/classification/classifier.ts
+      - src/cli/commands.ts
+      ... and 14 more
+```
+
+Supported commands:
+- `rm` / `git rm` — shows files and line counts
+- `git reset --hard` — shows uncommitted changes that will be discarded
+- `git clean` — shows untracked files that will be deleted
+- `git checkout --` — shows modified files that will revert
+- `git stash drop` — shows stash contents that will be lost
+
+## Automatic Backups
+
+Every destructive command triggers an automatic backup before execution:
+
+```
+~/.deliberate/backups/
+  └── my-project/
+      └── 20250114_120000/
+          ├── metadata.json    # Command, paths, restore info
+          ├── files/           # Backed up files (original structure)
+          └── git_state/       # Branch, commit, uncommitted diff
+```
+
+Files are recoverable even if you approve a destructive command by mistake. The `metadata.json` includes file mappings for exact restore to original locations.
 
 ## Installation
 

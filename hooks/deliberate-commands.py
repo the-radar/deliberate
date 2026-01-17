@@ -1260,6 +1260,7 @@ def extract_inline_content(command: str) -> str | None:
 
 def call_llm_for_explanation(command: str, pre_classification: dict | None = None, script_content: str | None = None) -> dict | None:
     """Call the configured LLM to explain the command using Claude Agent SDK."""
+    debug("call_llm_for_explanation started")
 
     llm_config = load_llm_config()
     if not llm_config:
@@ -1267,6 +1268,7 @@ def call_llm_for_explanation(command: str, pre_classification: dict | None = Non
         return None
 
     provider = llm_config["provider"]
+    debug(f"LLM provider: {provider}")
 
     # Only use SDK for claude-subscription provider
     if provider != "claude-subscription":
@@ -1350,15 +1352,30 @@ async def main():
     async with client:
         await client.query(prompt)
 
-        # Collect response from ResultMessage
+        # Collect response - check both AssistantMessage and ResultMessage
         response_text = ""
         async for msg in client.receive_response():
             msg_type = type(msg).__name__
-            if msg_type == 'ResultMessage' and hasattr(msg, 'result'):
-                response_text = msg.result
+
+            # Try to get text from AssistantMessage
+            if msg_type == 'AssistantMessage' and hasattr(msg, 'content'):
+                # content is a list of blocks (TextBlock, ToolUseBlock, etc.)
+                for block in (msg.content or []):
+                    block_type = type(block).__name__
+                    if block_type == 'TextBlock' and hasattr(block, 'text') and block.text:
+                        # Accumulate text from all TextBlocks
+                        if response_text:
+                            response_text += "\\n" + block.text
+                        else:
+                            response_text = block.text
+
+            # ResultMessage marks the end
+            if msg_type == 'ResultMessage':
+                if hasattr(msg, 'result') and msg.result:
+                    response_text = msg.result
                 break
 
-        print(response_text)
+        print(response_text if response_text else "")
 
 # Run async main
 asyncio.run(main())
@@ -1367,6 +1384,7 @@ asyncio.run(main())
             script_path = f.name
 
         # Run SDK script
+        debug("Running SDK script...")
         result = subprocess.run(
             ["python3", script_path],
             capture_output=True,
@@ -1376,11 +1394,14 @@ asyncio.run(main())
 
         os.unlink(script_path)
 
+        debug(f"SDK returncode: {result.returncode}")
+        debug(f"SDK stderr: {result.stderr[:500] if result.stderr else 'none'}")
         if result.returncode != 0:
             debug(f"SDK script failed: {result.stderr}")
             return None
 
         content = result.stdout.strip()
+        debug(f"SDK stdout (first 200 chars): {content[:200]}")
 
         # Parse the response
         risk = "MODERATE"
@@ -1523,6 +1544,13 @@ def main():
         else:
             risk = llm_result["risk"]
         explanation = llm_result["explanation"]
+
+    # Guard against None/empty explanation - fall back to classifier reason or generic message
+    if not explanation or explanation == "None":
+        if classifier_result and classifier_result.get("reason"):
+            explanation = classifier_result.get("reason")
+        else:
+            explanation = "Review command before proceeding"
 
     # NOTE: Deduplication is handled AFTER block/allow decision
     # We moved it below to prevent blocked commands from being allowed on retry

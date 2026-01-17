@@ -1,6 +1,6 @@
 {
   "name": "deliberate",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Safety layer for agentic coding tools - classifies shell commands before execution",
   "type": "module",
   "bin": {

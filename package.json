@@ -1,6 +1,6 @@
 {
   "name": "deliberate",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Safety layer for agentic coding tools - classifies shell commands before execution",
   "type": "module",
   "bin": {
@@ -43,7 +43,7 @@
     "command-analysis"
   ],
   "author": "Deliberate",
-  "license": "SEE LICENSE IN LICENSE",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/the-radar/deliberate"

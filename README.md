@@ -175,6 +175,4 @@ Command embeddings by [CmdCaliper](https://huggingface.co/CyCraftAI/CmdCaliper-b
 
 ## License
 
-Copyright © 2025 TheRadarTech LLC. All Rights Reserved.
-
-This software is proprietary. See [LICENSE](LICENSE) for details.
+MIT License - see [LICENSE](LICENSE) for details.

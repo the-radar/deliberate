@@ -12,6 +12,7 @@
     "bin/",
     "src/",
     "hooks/",
+    "opencode/",
     "training/build_classifier.py",
     "training/expanded-command-safety.jsonl",
     "models/classifier_base.pkl",

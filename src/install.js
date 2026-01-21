@@ -3,6 +3,7 @@
  * Handles:
  * - Symlinking hooks to ~/.claude/hooks/
  * - Updating ~/.claude/settings.json
+ * - Installing OpenCode plugin (if available)
  * - Configuring Deliberate LLM provider
  * - Optionally starting the classifier server
  */
@@ -23,6 +24,8 @@ const IS_WINDOWS = process.platform === 'win32';
 const CLAUDE_DIR = path.join(HOME_DIR, '.claude');
 const HOOKS_DIR = path.join(CLAUDE_DIR, 'hooks');
 const SETTINGS_FILE = path.join(CLAUDE_DIR, 'settings.json');
+const OPENCODE_DIR = path.join(HOME_DIR, '.config', 'opencode');
+const OPENCODE_PLUGIN_DIR = path.join(OPENCODE_DIR, 'plugins');
 
 // Python command (python on Windows, python3 on Unix)
 const PYTHON_CMD = IS_WINDOWS ? 'python' : 'python3';
@@ -30,6 +33,8 @@ const PIP_CMD = IS_WINDOWS ? 'pip' : 'pip3';
 
 // Required Python packages
 const PYTHON_DEPS = ['sentence-transformers', 'scikit-learn', 'numpy', 'claude-agent-sdk'];
+
+const OPENCODE_CONFIG_FILES = ['opencode.json', 'opencode.jsonc'];
 
 // Model download configuration
 const MODELS_URL = 'https://github.com/the-radar/deliberate/releases/download/v1.0.0/deliberate-models.tar.gz';
@@ -182,6 +187,118 @@ function installHooks() {
   }
 
   return installed;
+}
+
+function loadOpenCodeConfig() {
+  for (const filename of OPENCODE_CONFIG_FILES) {
+    const candidate = path.join(OPENCODE_DIR, filename);
+    if (fs.existsSync(candidate)) {
+      try {
+        const content = fs.readFileSync(candidate, 'utf-8');
+        return { path: candidate, config: JSON.parse(content) };
+      } catch (error) {
+        return { path: candidate, config: null, error: error.message };
+      }
+    }
+  }
+
+  return { path: path.join(OPENCODE_DIR, OPENCODE_CONFIG_FILES[0]), config: null };
+}
+
+function saveOpenCodeConfig(configPath, config) {
+  ensureDir(OPENCODE_DIR);
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+}
+
+function ensureOpenCodePluginReference() {
+  const pluginPaths = [
+    path.join(OPENCODE_PLUGIN_DIR, 'deliberate.js'),
+    path.join(OPENCODE_PLUGIN_DIR, 'deliberate-changes.js')
+  ];
+  const targets = pluginPaths.map((pluginPath) => {
+    const normalized = pluginPath.split(path.sep).join('/');
+    return normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`;
+  });
+  const { path: configPath, config, error } = loadOpenCodeConfig();
+
+  if (error) {
+    console.warn(`Warning: Could not parse ${configPath}: ${error}`);
+    return { updated: false, configPath };
+  }
+
+  const nextConfig = config || { $schema: 'https://opencode.ai/config.json' };
+  const plugins = Array.isArray(nextConfig.plugin) ? nextConfig.plugin : [];
+  let updated = false;
+
+  for (const target of targets) {
+    if (!plugins.includes(target)) {
+      plugins.push(target);
+      updated = true;
+    }
+  }
+
+  if (updated) {
+    nextConfig.plugin = plugins;
+    saveOpenCodeConfig(configPath, nextConfig);
+  }
+
+  return { updated, configPath };
+}
+
+/**
+ * Install OpenCode plugin to ~/.config/opencode/plugins
+ * Uses symlink on Unix, copy on Windows
+ * @returns {string|null} Installed plugin path or null
+ */
+function installOpenCodePlugin() {
+  const pluginSource = path.join(__dirname, '..', 'opencode');
+
+  const primaryPluginSource = path.join(pluginSource, 'deliberate-plugin.js');
+  const changesPluginSource = path.join(pluginSource, 'deliberate-changes-plugin.js');
+
+  if (!fs.existsSync(primaryPluginSource) || !fs.existsSync(changesPluginSource)) {
+    console.warn('Warning: OpenCode plugin source not found, skipping');
+    return null;
+  }
+
+  ensureDir(OPENCODE_PLUGIN_DIR);
+
+  const primaryDest = path.join(OPENCODE_PLUGIN_DIR, 'deliberate.js');
+  const changesDest = path.join(OPENCODE_PLUGIN_DIR, 'deliberate-changes.js');
+
+  for (const dest of [primaryDest, changesDest]) {
+    try {
+      const stat = fs.lstatSync(dest);
+      if (stat.isFile() || stat.isSymbolicLink()) {
+        fs.unlinkSync(dest);
+      }
+    } catch (err) {
+      // File doesn't exist, that's fine
+    }
+  }
+
+  if (IS_WINDOWS) {
+    fs.copyFileSync(primaryPluginSource, primaryDest);
+    fs.copyFileSync(changesPluginSource, changesDest);
+    console.log(`Installed OpenCode plugin: ${primaryDest} (copied)`);
+    console.log(`Installed OpenCode plugin: ${changesDest} (copied)`);
+  } else {
+    fs.symlinkSync(primaryPluginSource, primaryDest);
+    fs.symlinkSync(changesPluginSource, changesDest);
+    fs.chmodSync(primaryPluginSource, 0o755);
+    fs.chmodSync(changesPluginSource, 0o755);
+    console.log(`Installed OpenCode plugin: ${primaryDest} -> ${primaryPluginSource}`);
+    console.log(`Installed OpenCode plugin: ${changesDest} -> ${changesPluginSource}`);
+  }
+
+  const configResult = ensureOpenCodePluginReference();
+  if (configResult.updated) {
+    console.log(`Updated OpenCode config: ${configResult.configPath}`);
+  } else {
+    console.log(`OpenCode config already references plugin: ${configResult.configPath}`);
+  }
+
+  return primaryDest;
 }
 
 /**
@@ -715,6 +832,16 @@ export async function install() {
   console.log('Updating Claude Code settings...');
   updateSettings();
 
+  // Install OpenCode plugin
+  console.log('');
+  console.log('Installing OpenCode plugin...');
+  const opencodePlugin = installOpenCodePlugin();
+  if (!opencodePlugin) {
+    console.log('OpenCode plugin: ⚠️  Not installed');
+  } else {
+    console.log('OpenCode plugin: ✅ Installed (commands + changes)');
+  }
+
   // Configure LLM if not already configured
   if (!isLLMConfigured()) {
     await configureLLM();
@@ -734,14 +861,19 @@ export async function install() {
   for (const hookPath of installed) {
     console.log(`  - ${hookPath}`);
   }
+  if (opencodePlugin) {
+    console.log(`  - ${opencodePlugin} (OpenCode plugin: commands)`);
+    console.log(`  - ${path.join(OPENCODE_PLUGIN_DIR, 'deliberate-changes.js')} (OpenCode plugin: changes)`);
+  }
   console.log('');
   console.log('Next steps:');
   console.log('  1. Restart Claude Code to load the new hooks');
+  console.log('  2. Restart OpenCode to load the new plugin');
   console.log('');
-  console.log('  2. (Optional) Start the classifier server for faster ML detection:');
+  console.log('  3. (Optional) Start the classifier server for faster ML detection:');
   console.log('     deliberate serve');
   console.log('');
-  console.log('  3. Test classification:');
+  console.log('  4. Test classification:');
   console.log('     deliberate classify "rm -rf /"');
   console.log('');
 }

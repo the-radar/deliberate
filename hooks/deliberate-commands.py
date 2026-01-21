@@ -27,6 +27,7 @@ from pathlib import Path
 
 # Configuration
 CLASSIFIER_URL = "http://localhost:8765/classify/command"
+LLM_MODE = os.environ.get("DELIBERATE_LLM_MODE")
 
 # Support both plugin mode (CLAUDE_PLUGIN_ROOT) and npm install mode (~/.deliberate/)
 # Plugin mode: config in plugin directory
@@ -1057,6 +1058,9 @@ def get_token_from_keychain():
 
 def load_llm_config() -> dict | None:
     """Load LLM configuration from config file or keychain."""
+    if LLM_MODE == "manual":
+        return None
+
     llm = _load_config().get("llm", {})
     provider = llm.get("provider")
     if not provider:

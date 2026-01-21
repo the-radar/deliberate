@@ -21,7 +21,7 @@ program
 
 program
   .command('install')
-  .description('Install hooks and configure Claude Code integration')
+  .description('Install hooks and configure Claude Code/OpenCode integration')
   .action(async () => {
     await install();
   });
@@ -49,7 +49,7 @@ program
   .action(async () => {
     console.log('Deliberate Status\n');
 
-    // Check hooks installation
+    // Check Claude Code hooks installation
     const claudeSettingsPath = join(homedir(), '.claude', 'settings.json');
     let hooksInstalled = false;
 
@@ -60,21 +60,20 @@ program
         const preToolUse = hooks.PreToolUse || [];
         const postToolUse = hooks.PostToolUse || [];
 
-        const hasCommandHook = preToolUse.some(h =>
-          h.command && h.command.includes('explain-command')
-        );
-        const hasChangesHook = postToolUse.some(h =>
-          h.command && h.command.includes('explain-changes')
-        );
+        const hasHookCommand = (entries, needle) =>
+          entries.some(entry => Array.isArray(entry.hooks) && entry.hooks.some(hook =>
+            hook.command && hook.command.includes(needle)
+          ));
 
-        if (hasCommandHook && hasChangesHook) {
+        const hasCommandHook = hasHookCommand(preToolUse, 'deliberate-commands');
+        const hasChangesHook = hasHookCommand(postToolUse, 'deliberate-changes');
+        const hasCommandPostHook = hasHookCommand(postToolUse, 'deliberate-commands-post');
+
+        if (hasCommandHook && hasChangesHook && hasCommandPostHook) {
           console.log('Hooks:      ✅ Installed (PreToolUse + PostToolUse)');
           hooksInstalled = true;
-        } else if (hasCommandHook) {
-          console.log('Hooks:      ⚠️  Partial (PreToolUse only)');
-          hooksInstalled = true;
-        } else if (hasChangesHook) {
-          console.log('Hooks:      ⚠️  Partial (PostToolUse only)');
+        } else if (hasCommandHook || hasChangesHook || hasCommandPostHook) {
+          console.log('Hooks:      ⚠️  Partial (missing some hooks)');
           hooksInstalled = true;
         } else {
           console.log('Hooks:      ❌ Not installed');
@@ -84,6 +83,41 @@ program
       }
     } else {
       console.log('Hooks:      ❌ Claude settings not found');
+    }
+
+    // Check OpenCode plugin installation
+    const openCodeConfigDir = join(homedir(), '.config', 'opencode');
+    const openCodeConfigPaths = [join(openCodeConfigDir, 'opencode.json'), join(openCodeConfigDir, 'opencode.jsonc')];
+    const openCodePluginPaths = [
+      join(openCodeConfigDir, 'plugins', 'deliberate.js'),
+      join(openCodeConfigDir, 'plugins', 'deliberate-changes.js')
+    ];
+
+    let openCodeInstalled = false;
+    const configPath = openCodeConfigPaths.find(path => existsSync(path));
+
+    if (configPath) {
+      try {
+        const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+        const plugins = Array.isArray(config.plugin) ? config.plugin.map(String) : [];
+        const commandPlugin = plugins.some(entry => entry.includes('deliberate.js'));
+        const changesPlugin = plugins.some(entry => entry.includes('deliberate-changes.js'));
+        const filesPresent = openCodePluginPaths.every(path => existsSync(path));
+
+        if (commandPlugin && changesPlugin && filesPresent) {
+          console.log('OpenCode:   ✅ Installed (commands + changes)');
+          openCodeInstalled = true;
+        } else if (commandPlugin || changesPlugin || filesPresent) {
+          console.log('OpenCode:   ⚠️  Partial install');
+          openCodeInstalled = true;
+        } else {
+          console.log('OpenCode:   ❌ Not installed');
+        }
+      } catch (e) {
+        console.log('OpenCode:   ❌ Error reading opencode.json');
+      }
+    } else {
+      console.log('OpenCode:   ❌ Config not found');
     }
 
     // Check classifier status
@@ -103,8 +137,8 @@ program
 
     // Overall status
     console.log('');
-    if (hooksInstalled) {
-      console.log('Status: Ready to protect your Claude Code sessions');
+    if (hooksInstalled || openCodeInstalled) {
+      console.log('Status: Ready to protect your agent sessions');
     } else {
       console.log('Status: Run "deliberate install" to set up hooks');
     }

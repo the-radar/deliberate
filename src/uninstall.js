@@ -15,11 +15,15 @@ const CLAUDE_DIR = path.join(HOME_DIR, '.claude');
 const HOOKS_DIR = path.join(CLAUDE_DIR, 'hooks');
 const SETTINGS_FILE = path.join(CLAUDE_DIR, 'settings.json');
 const CONFIG_FILE = path.join(HOME_DIR, '.deliberate', 'config.json');
+const OPENCODE_DIR = path.join(HOME_DIR, '.config', 'opencode');
+const OPENCODE_PLUGIN_DIR = path.join(OPENCODE_DIR, 'plugins');
+const OPENCODE_CONFIG_FILES = ['opencode.json', 'opencode.jsonc'];
 
 // Hook files to remove
 const HOOKS_TO_REMOVE = [
-  'deliberate-explain-command.py',
-  'deliberate-explain-changes.py'
+  'deliberate-commands.py',
+  'deliberate-commands-post.py',
+  'deliberate-changes.py'
 ];
 
 /**
@@ -40,6 +44,53 @@ function removeHooks() {
 
   if (removed === 0) {
     console.log('  No hook files found to remove');
+  }
+
+  return removed;
+}
+
+/**
+ * Remove OpenCode plugin from config and plugins dir
+ */
+function removeOpenCodePlugin() {
+  let removed = false;
+
+  const pluginPaths = [
+    path.join(OPENCODE_PLUGIN_DIR, 'deliberate.js'),
+    path.join(OPENCODE_PLUGIN_DIR, 'deliberate-changes.js')
+  ];
+
+  for (const pluginPath of pluginPaths) {
+    if (fs.existsSync(pluginPath)) {
+      fs.unlinkSync(pluginPath);
+      console.log(`  Removed OpenCode plugin: ${pluginPath}`);
+      removed = true;
+    }
+  }
+
+  for (const filename of OPENCODE_CONFIG_FILES) {
+    const configPath = path.join(OPENCODE_DIR, filename);
+    if (!fs.existsSync(configPath)) continue;
+
+    try {
+      const content = fs.readFileSync(configPath, 'utf-8');
+      const config = JSON.parse(content);
+      if (Array.isArray(config.plugin)) {
+        const nextPlugins = config.plugin.filter((entry) => !String(entry).includes('deliberate'));
+        if (nextPlugins.length !== config.plugin.length) {
+          config.plugin = nextPlugins;
+          fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+          console.log(`  Updated OpenCode config: ${configPath}`);
+          removed = true;
+        }
+      }
+    } catch (error) {
+      console.warn(`  Warning: Could not parse ${configPath}: ${error.message}`);
+    }
+  }
+
+  if (!removed) {
+    console.log('  No OpenCode plugin config found');
   }
 
   return removed;
@@ -71,8 +122,8 @@ function removeFromSettings() {
 
           const filteredHooks = matcher.hooks.filter(hook => {
             const isDeliberate = hook.command && (
-              hook.command.includes('deliberate-explain-command') ||
-              hook.command.includes('deliberate-explain-changes')
+              hook.command.includes('deliberate-commands') ||
+              hook.command.includes('deliberate-changes')
             );
             if (isDeliberate) modified = true;
             return !isDeliberate;
@@ -91,8 +142,8 @@ function removeFromSettings() {
 
           const filteredHooks = matcher.hooks.filter(hook => {
             const isDeliberate = hook.command && (
-              hook.command.includes('deliberate-explain-command') ||
-              hook.command.includes('deliberate-explain-changes')
+              hook.command.includes('deliberate-commands') ||
+              hook.command.includes('deliberate-changes')
             );
             if (isDeliberate) modified = true;
             return !isDeliberate;
@@ -153,6 +204,10 @@ export async function uninstall() {
   console.log('');
   removeFromSettings();
 
+  // Remove OpenCode plugin
+  console.log('');
+  removeOpenCodePlugin();
+
   // Ask about config
   console.log('');
   if (fs.existsSync(CONFIG_FILE)) {
@@ -186,7 +241,7 @@ export async function uninstall() {
   console.log('===========================================');
   console.log('');
   console.log('Next step:');
-  console.log('  Restart Claude Code to unload the hooks');
+  console.log('  Restart Claude Code and OpenCode to unload hooks/plugins');
   console.log('');
 }
 

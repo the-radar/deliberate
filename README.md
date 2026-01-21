@@ -111,7 +111,7 @@ npm install -g deliberate
 deliberate install
 ```
 
-The installer walks you through LLM provider setup (Claude, Anthropic API, or Ollama).
+The installer sets up Claude Code hooks and the OpenCode plugin, then walks you through LLM provider setup (Claude, Anthropic API, or Ollama). If OpenCode is installed, it registers two `file://` plugins (commands + changes) in `~/.config/opencode/opencode.json`.
 
 ### Dependencies
 
@@ -126,7 +126,7 @@ The CmdCaliper embedding model (~419MB) downloads on first use.
 ## CLI
 
 ```bash
-deliberate install          # Install hooks, configure LLM
+deliberate install          # Install Claude Code hooks + OpenCode plugin, configure LLM
 deliberate status           # Check installation
 deliberate classify "rm -rf /"   # Test classification → DANGEROUS
 deliberate serve            # Start classifier server (faster)
@@ -159,9 +159,18 @@ python training/build_classifier.py --model base  # Retrain
 
 - Node.js 18+
 - Python 3.9+
-- Claude Code (or any tool supporting Claude Code hooks)
+- Claude Code or OpenCode 1.0+
 
 Works on macOS, Linux, and Windows.
+
+## OpenCode
+
+OpenCode support is installed by `deliberate install`. It registers two plugins in `~/.config/opencode/opencode.json`:
+
+- `file://~/.config/opencode/plugins/deliberate.js` (command safety)
+- `file://~/.config/opencode/plugins/deliberate-changes.js` (edit/change summaries)
+
+After install, restart OpenCode to load the plugins. For edit/change summaries, OpenCode must be configured to allow edit tools (write/edit/patch/multiedit) so the plugin can read tool metadata. The plugins call the same Deliberate hook scripts, so LLM explanations behave the same as Claude Code.
 
 ## Uninstall
 

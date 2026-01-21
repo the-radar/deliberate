@@ -111,17 +111,14 @@ npm install -g deliberate
 deliberate install
 ```
 
-The installer sets up Claude Code hooks and the OpenCode plugin, then walks you through LLM provider setup (Claude, Anthropic API, or Ollama). If OpenCode is installed, it registers two `file://` plugins (commands + changes) in `~/.config/opencode/opencode.json`.
+The installer configures:
+- **Claude Code:** Adds hooks to `~/.claude/settings.json`.
+- **OpenCode:** Installs plugins to `~/.config/opencode/plugins/` and registers them in `~/.config/opencode/opencode.json`.
+- **LLM:** Sets up your provider (Claude, Anthropic API, or Ollama) for explanations.
 
 ### Dependencies
 
-**Python 3.9+** with ML libraries:
-
-```bash
-pip install sentence-transformers scikit-learn numpy
-```
-
-The CmdCaliper embedding model (~419MB) downloads on first use.
+**Python 3.9+** is required. The installer auto-installs `sentence-transformers`, `scikit-learn`, and `numpy`. The CmdCaliper embedding model (~419MB) downloads on first use.
 
 ## CLI
 
@@ -163,20 +160,23 @@ python training/build_classifier.py --model base  # Retrain
 
 Works on macOS, Linux, and Windows.
 
-## OpenCode
+## OpenCode Support
 
-OpenCode support is installed by `deliberate install`. It registers two plugins in `~/.config/opencode/opencode.json`:
+Deliberate integrates with OpenCode via two plugins (installed automatically):
+- **Command Safety:** Intercepts `bash` commands like `rm`, `git reset`, `docker rm`.
+- **Change Summaries:** Summarizes file modifications from `write`, `edit`, `patch`, and `multiedit` tools.
 
-- `file://~/.config/opencode/plugins/deliberate.js` (command safety)
-- `file://~/.config/opencode/plugins/deliberate-changes.js` (edit/change summaries)
+Unlike standard plugins, these reuse the same Python analysis engine as Claude Code, ensuring consistent safety rules and explanations across platforms.
 
-After install, restart OpenCode to load the plugins. For edit/change summaries, OpenCode must be configured to allow edit tools (write/edit/patch/multiedit) so the plugin can read tool metadata. The plugins call the same Deliberate hook scripts, so LLM explanations behave the same as Claude Code.
+**Note:** You must restart OpenCode after `deliberate install`.
 
 ## Uninstall
 
 ```bash
 deliberate uninstall
 ```
+
+Removes all hooks, plugins, and configuration.
 
 ## Acknowledgments
 

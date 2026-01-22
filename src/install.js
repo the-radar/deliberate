@@ -26,6 +26,14 @@ const HOOKS_DIR = path.join(CLAUDE_DIR, 'hooks');
 const SETTINGS_FILE = path.join(CLAUDE_DIR, 'settings.json');
 const OPENCODE_DIR = path.join(HOME_DIR, '.config', 'opencode');
 const OPENCODE_PLUGIN_DIR = path.join(OPENCODE_DIR, 'plugins');
+const ANTIGRAVITY_DIR = path.join(HOME_DIR, '.antigravity');
+const ANTIGRAVITY_HOOKS_DIR = path.join(ANTIGRAVITY_DIR, 'hooks');
+const ANTIGRAVITY_SETTINGS = path.join(HOME_DIR, 'Library', 'Application Support', 'Antigravity', 'User', 'settings.json'); // macOS specific, need to handle others?
+// Research showed ~/.antigravity/settings.json as global config, but ls showed ~/Library/.../settings.json
+// I'll check both or prefer the one that exists.
+const GEMINI_DIR = path.join(HOME_DIR, '.gemini');
+const GEMINI_HOOKS_DIR = path.join(GEMINI_DIR, 'hooks');
+const GEMINI_SETTINGS = path.join(GEMINI_DIR, 'settings.json');
 
 // Python command (python on Windows, python3 on Unix)
 const PYTHON_CMD = IS_WINDOWS ? 'python' : 'python3';
@@ -105,12 +113,30 @@ async function downloadModels() {
     console.log('  Models downloaded successfully');
     return true;
   } catch (error) {
-    console.error('  Failed to download models:', error.message);
-    console.error('');
-    console.error('  You can manually download from:');
-    console.error(`    ${MODELS_URL}`);
-    console.error(`  And extract to: ${MODELS_DIR}`);
-    return false;
+    console.warn('  Direct download failed, attempting Python preload...');
+    
+    // Fallback: Use Python to download model to cache
+    try {
+      const classifyScript = path.join(__dirname, 'classifier', 'classify_command.py');
+      // Use base64 encoded "echo init" to trigger model load
+      const cmd = `${PYTHON_CMD} "${classifyScript}" --base64 "ZWNobyBpbml0" --model base`;
+      
+      execSync(cmd, { 
+        stdio: 'inherit',
+        timeout: 600000 // 10 minutes
+      });
+      
+      console.log('  Model preloaded successfully (cached)');
+      return true;
+    } catch (pyError) {
+      console.error('  Failed to download models:', error.message);
+      console.error('  Failed to preload with Python:', pyError.message);
+      console.error('');
+      console.error('  You can manually download from:');
+      console.error(`    ${MODELS_URL}`);
+      console.error(`  And extract to: ${MODELS_DIR}`);
+      return false;
+    }
   }
 }
 
@@ -243,6 +269,129 @@ function ensureOpenCodePluginReference() {
   }
 
   return { updated, configPath };
+}
+
+/**
+ * Install Antigravity hooks
+ */
+function installAntigravityHooks() {
+  // Check if Antigravity is installed (check both config locations)
+  let settingsFile = path.join(HOME_DIR, '.antigravity', 'settings.json');
+  if (!fs.existsSync(settingsFile)) {
+    // Try macOS standard path
+    settingsFile = path.join(HOME_DIR, 'Library', 'Application Support', 'Antigravity', 'User', 'settings.json');
+  }
+
+  if (!fs.existsSync(settingsFile) && !fs.existsSync(ANTIGRAVITY_DIR)) {
+    console.log('Antigravity: ⚠️  Not found (skipping)');
+    return false;
+  }
+
+  ensureDir(ANTIGRAVITY_HOOKS_DIR);
+
+  const sourceDir = path.join(__dirname, '..', 'antigravity');
+  const hooks = [
+    { src: 'pre-tool-use.sh', dest: 'pre-tool-use.sh' },
+    { src: 'post-tool-use.sh', dest: 'post-tool-use.sh' }
+  ];
+
+  for (const hook of hooks) {
+    const sourcePath = path.join(sourceDir, hook.src);
+    const destPath = path.join(ANTIGRAVITY_HOOKS_DIR, hook.dest);
+
+    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+
+    if (IS_WINDOWS) {
+      fs.copyFileSync(sourcePath, destPath);
+    } else {
+      fs.symlinkSync(sourcePath, destPath);
+      fs.chmodSync(sourcePath, 0o755);
+    }
+  }
+
+  // Update settings
+  if (fs.existsSync(settingsFile)) {
+    try {
+      const content = fs.readFileSync(settingsFile, 'utf-8');
+      const settings = JSON.parse(content);
+      
+      if (!settings.tools) settings.tools = {};
+      settings.tools.enableHooks = true;
+      
+      if (!settings.hooks) settings.hooks = {};
+      settings.hooks.enabled = true;
+      settings.hooks.path = ANTIGRAVITY_HOOKS_DIR;
+
+      fs.writeFileSync(settingsFile, JSON.stringify(settings, null, 2));
+      console.log(`Antigravity: ✅ Hooks installed & enabled in ${settingsFile}`);
+    } catch (e) {
+      console.warn(`Antigravity: ⚠️  Failed to update settings: ${e.message}`);
+    }
+  } else {
+    console.log('Antigravity: ✅ Hooks installed (settings.json not found)');
+  }
+
+  return true;
+}
+
+/**
+ * Install Gemini hooks
+ */
+function installGeminiHooks() {
+  if (!fs.existsSync(GEMINI_DIR)) {
+    console.log('Gemini: ⚠️  Not found (skipping)');
+    return false;
+  }
+
+  ensureDir(GEMINI_HOOKS_DIR);
+
+  const sourceDir = path.join(__dirname, '..', 'gemini');
+  const hooks = [
+    { src: 'pre-command.sh', dest: 'pre-command.sh' },
+    { src: 'post-file-change.sh', dest: 'post-file-change.sh' }
+  ];
+
+  for (const hook of hooks) {
+    const sourcePath = path.join(sourceDir, hook.src);
+    const destPath = path.join(GEMINI_HOOKS_DIR, hook.dest);
+
+    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+
+    if (IS_WINDOWS) {
+      fs.copyFileSync(sourcePath, destPath);
+    } else {
+      fs.symlinkSync(sourcePath, destPath);
+      fs.chmodSync(sourcePath, 0o755);
+    }
+  }
+
+  // Update settings
+  if (fs.existsSync(GEMINI_SETTINGS)) {
+    try {
+      const content = fs.readFileSync(GEMINI_SETTINGS, 'utf-8');
+      const settings = JSON.parse(content);
+      
+      if (!settings.tools) settings.tools = {};
+      settings.tools.enableHooks = true;
+      
+      if (!settings.hooks) settings.hooks = {};
+      settings.hooks.enabled = true;
+      settings.hooks.path = GEMINI_HOOKS_DIR;
+      
+      if (!settings.hooks.scripts) settings.hooks.scripts = {};
+      settings.hooks.scripts['pre-command'] = 'pre-command.sh';
+      settings.hooks.scripts['post-file-change'] = 'post-file-change.sh';
+
+      fs.writeFileSync(GEMINI_SETTINGS, JSON.stringify(settings, null, 2));
+      console.log(`Gemini: ✅ Hooks installed & enabled in ${GEMINI_SETTINGS}`);
+    } catch (e) {
+      console.warn(`Gemini: ⚠️  Failed to update settings: ${e.message}`);
+    }
+  } else {
+    console.log('Gemini: ✅ Hooks installed (settings.json not found)');
+  }
+
+  return true;
 }
 
 /**
@@ -842,6 +991,14 @@ export async function install() {
     console.log('OpenCode plugin: ✅ Installed (commands + changes)');
   }
 
+  // Install Antigravity hooks
+  console.log('');
+  installAntigravityHooks();
+
+  // Install Gemini hooks
+  console.log('');
+  installGeminiHooks();
+
   // Configure LLM if not already configured
   if (!isLLMConfigured()) {
     await configureLLM();
@@ -869,11 +1026,12 @@ export async function install() {
   console.log('Next steps:');
   console.log('  1. Restart Claude Code to load the new hooks');
   console.log('  2. Restart OpenCode to load the new plugin');
+  console.log('  3. Restart Antigravity/Gemini to load new hooks');
   console.log('');
-  console.log('  3. (Optional) Start the classifier server for faster ML detection:');
+  console.log('  4. (Optional) Start the classifier server for faster ML detection:');
   console.log('     deliberate serve');
   console.log('');
-  console.log('  4. Test classification:');
+  console.log('  5. Test classification:');
   console.log('     deliberate classify "rm -rf /"');
   console.log('');
 }

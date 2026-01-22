@@ -114,6 +114,8 @@ deliberate install
 The installer configures:
 - **Claude Code:** Adds hooks to `~/.claude/settings.json`.
 - **OpenCode:** Installs plugins to `~/.config/opencode/plugins/` and registers them in `~/.config/opencode/opencode.json`.
+- **Antigravity:** Adds hooks to `~/.antigravity/hooks/` and updates `settings.json`.
+- **Gemini:** Adds hooks to `~/.gemini/hooks/` and updates `settings.json`.
 - **LLM:** Sets up your provider (Claude, Anthropic API, or Ollama) for explanations.
 
 ### Dependencies
@@ -170,6 +172,22 @@ Unlike standard plugins, these reuse the same Python analysis engine as Claude C
 
 **Note:** You must restart OpenCode after `deliberate install`.
 
+## Antigravity Support
+
+Deliberate integrates with Antigravity via shell hooks (installed automatically):
+- **PreToolUse:** Intercepts `Bash` tool usage to analyze commands.
+- **PostToolUse:** Logs file changes from `Write`/`Edit` tools.
+
+Hooks are installed to `~/.antigravity/hooks/` and enabled in `~/.antigravity/settings.json`.
+
+## Gemini Support
+
+Deliberate integrates with Gemini CLI via shell hooks (installed automatically):
+- **pre-command:** Intercepts shell commands.
+- **post-file-change:** Logs file modifications.
+
+Hooks are installed to `~/.gemini/hooks/` and enabled in `~/.gemini/settings.json`.
+
 ## Uninstall
 
 ```bash
@@ -184,4 +202,5 @@ Command embeddings by [CmdCaliper](https://huggingface.co/CyCraftAI/CmdCaliper-b
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+Copyright © 2026 The Radar. All rights reserved.
+Source available for inspection and personal use.

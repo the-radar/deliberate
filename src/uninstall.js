@@ -18,6 +18,10 @@ const CONFIG_FILE = path.join(HOME_DIR, '.deliberate', 'config.json');
 const OPENCODE_DIR = path.join(HOME_DIR, '.config', 'opencode');
 const OPENCODE_PLUGIN_DIR = path.join(OPENCODE_DIR, 'plugins');
 const OPENCODE_CONFIG_FILES = ['opencode.json', 'opencode.jsonc'];
+const ANTIGRAVITY_DIR = path.join(HOME_DIR, '.antigravity');
+const ANTIGRAVITY_HOOKS_DIR = path.join(ANTIGRAVITY_DIR, 'hooks');
+const GEMINI_DIR = path.join(HOME_DIR, '.gemini');
+const GEMINI_HOOKS_DIR = path.join(GEMINI_DIR, 'hooks');
 
 // Hook files to remove
 const HOOKS_TO_REMOVE = [
@@ -94,6 +98,46 @@ function removeOpenCodePlugin() {
   }
 
   return removed;
+}
+
+/**
+ * Remove Antigravity hooks
+ */
+function uninstallAntigravityHooks() {
+  if (!fs.existsSync(ANTIGRAVITY_HOOKS_DIR)) return;
+
+  console.log('Removing Antigravity hooks...');
+  const hooks = ['pre-tool-use.sh', 'post-tool-use.sh'];
+  
+  for (const hook of hooks) {
+    const hookPath = path.join(ANTIGRAVITY_HOOKS_DIR, hook);
+    if (fs.existsSync(hookPath)) {
+      fs.unlinkSync(hookPath);
+      console.log(`  Removed: ${hookPath}`);
+    }
+  }
+
+  // Note: We don't automatically disable hooks in settings.json to avoid messing up user config
+  // if they have other hooks. But we could check if only our hooks were there.
+  // For now, leaving the config enabled is safer than breaking other tools.
+}
+
+/**
+ * Remove Gemini hooks
+ */
+function uninstallGeminiHooks() {
+  if (!fs.existsSync(GEMINI_HOOKS_DIR)) return;
+
+  console.log('Removing Gemini hooks...');
+  const hooks = ['pre-command.sh', 'post-file-change.sh'];
+  
+  for (const hook of hooks) {
+    const hookPath = path.join(GEMINI_HOOKS_DIR, hook);
+    if (fs.existsSync(hookPath)) {
+      fs.unlinkSync(hookPath);
+      console.log(`  Removed: ${hookPath}`);
+    }
+  }
 }
 
 /**
@@ -208,6 +252,14 @@ export async function uninstall() {
   console.log('');
   removeOpenCodePlugin();
 
+  // Remove Antigravity hooks
+  console.log('');
+  uninstallAntigravityHooks();
+
+  // Remove Gemini hooks
+  console.log('');
+  uninstallGeminiHooks();
+
   // Ask about config
   console.log('');
   if (fs.existsSync(CONFIG_FILE)) {
@@ -241,7 +293,7 @@ export async function uninstall() {
   console.log('===========================================');
   console.log('');
   console.log('Next step:');
-  console.log('  Restart Claude Code and OpenCode to unload hooks/plugins');
+  console.log('  Restart Claude Code, OpenCode, Antigravity, and Gemini to unload hooks/plugins');
   console.log('');
 }
 

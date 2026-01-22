@@ -1,6 +1,6 @@
 {
   "name": "deliberate",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Safety layer for agentic coding tools - classifies shell commands before execution",
   "type": "module",
   "bin": {
@@ -13,14 +13,15 @@
     "src/",
     "hooks/",
     "opencode/",
+    "antigravity/",
+    "gemini/",
     "training/build_classifier.py",
     "training/expanded-command-safety.jsonl",
     "models/classifier_base.pkl",
     "models/malicious_embeddings.json",
     "models/training_metadata.json",
     "models/similarity_thresholds.json",
-    "README.md",
-    "LICENSE"
+    "README.md"
   ],
   "scripts": {
     "start": "node src/server.js",
@@ -44,7 +45,7 @@
     "command-analysis"
   ],
   "author": "Deliberate",
-  "license": "MIT",
+  "license": "UNLICENSED",
   "repository": {
     "type": "git",
     "url": "https://github.com/the-radar/deliberate"

@@ -12,6 +12,8 @@
 
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
+import path from 'path';
+import { readRecentEvents } from './event-log.js';
 
 function buildTuiCommandArgs(options = {}) {
   // We want to run the exact same CLI that invoked `deliberate pane`, even when
@@ -49,11 +51,44 @@ function isTmux() {
   return Boolean(process.env.TMUX);
 }
 
+function pickSessionForCwd(events, cwd) {
+  const anchor = typeof cwd === 'string' && cwd.trim() ? cwd : null;
+  if (!anchor) return null;
+
+  const withSep = anchor.endsWith(path.sep) ? anchor : `${anchor}${path.sep}`;
+
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const ev = events[i];
+    const evCwd = typeof ev?.data?.cwd === 'string' ? ev.data.cwd : null;
+    if (!evCwd) continue;
+
+    const evWithSep = evCwd.endsWith(path.sep) ? evCwd : `${evCwd}${path.sep}`;
+    const matches = evCwd === anchor || anchor.startsWith(evWithSep) || evCwd.startsWith(withSep);
+    if (!matches) continue;
+
+    const sid = typeof ev.sessionId === 'string' ? ev.sessionId : null;
+    if (sid) return sid;
+  }
+
+  return null;
+}
+
 export async function openPane(options = {}) {
   const percent = Number(options.percent) > 0 ? Math.min(Math.max(Number(options.percent), 10), 80) : 30;
   const direction = options.direction === 'left' ? 'left' : 'right';
 
-  const tui = buildTuiCommandArgs(options);
+  const resolved = { ...options };
+
+  // If the user didn't specify a session, try to pick the session that last
+  // emitted events for this working directory. This makes `deliberate pane`
+  // feel "native" to the Claude Code session in the current project.
+  if (!resolved.allSessions && !resolved.sessionId) {
+    const events = readRecentEvents({ days: 2, maxEventsPerFile: 2000 });
+    const picked = pickSessionForCwd(events, resolved.cwd || process.cwd());
+    if (picked) resolved.sessionId = picked;
+  }
+
+  const tui = buildTuiCommandArgs(resolved);
 
   if (isWezTerm()) {
     const args = [

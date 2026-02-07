@@ -537,6 +537,7 @@ def main():
     hook_event = input_data.get("hook_event_name", "PreToolUse")
     tool_name = input_data.get("tool_name", "")
     tool_input = input_data.get("tool_input", {})
+    cwd = input_data.get("cwd", os.getcwd())
 
     # Only process Write, Edit, and MultiEdit
     if tool_name not in ("Write", "Edit", "MultiEdit"):
@@ -716,6 +717,7 @@ def main():
         "operation": op_label.lower(),
         "filePath": file_path,
         "relativePath": rel_path,
+        "cwd": cwd,
         "risk": risk,
         "explanation": explanation,
         "permissionDecision": "allow"

@@ -23,6 +23,29 @@ function isTty() {
   return Boolean(process.stdout.isTTY && process.stdin.isTTY);
 }
 
+function pickSessionForCwd(events, cwd) {
+  const anchor = typeof cwd === 'string' && cwd.trim() ? cwd : null;
+  if (!anchor) return null;
+
+  const withSep = anchor.endsWith(path.sep) ? anchor : `${anchor}${path.sep}`;
+
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const ev = events[i];
+    const evCwd = typeof ev?.data?.cwd === 'string' ? ev.data.cwd : null;
+    if (!evCwd) continue;
+
+    const evWithSep = evCwd.endsWith(path.sep) ? evCwd : `${evCwd}${path.sep}`;
+
+    const matches = evCwd === anchor || anchor.startsWith(evWithSep) || evCwd.startsWith(withSep);
+    if (matches) {
+      const sid = typeof ev.sessionId === 'string' ? ev.sessionId : null;
+      if (sid) return sid;
+    }
+  }
+
+  return null;
+}
+
 function truncate(value, max) {
   const str = String(value ?? '');
   if (str.length <= max) return str;
@@ -204,6 +227,8 @@ export async function runTui(options = {}) {
   const serverBaseUrl = config.gui?.serverBaseUrl || 'http://localhost:8765';
   const serverPort = config.classifier?.serverPort || 8765;
 
+  const anchorCwd = options.cwd || process.cwd();
+
   const state = {
     follow: options.follow ?? true,
     allSessions: options.allSessions ?? false,
@@ -215,9 +240,10 @@ export async function runTui(options = {}) {
 
   const sessions = buildSessions(state.events);
   const latest = sessions.length ? sessions[sessions.length - 1].sessionId : null;
+  const byCwd = pickSessionForCwd(state.events, anchorCwd);
 
   if (!state.allSessions && !state.sessionId) {
-    state.sessionId = latest;
+    state.sessionId = byCwd || latest;
   }
 
   const screen = blessed.screen({

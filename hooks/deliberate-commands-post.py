@@ -17,6 +17,7 @@ import hashlib
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from os import getcwd
 
 DEBUG = os.environ.get("DELIBERATE_DEBUG", "").lower() in ("1", "true", "yes")
 BROADCAST_URL = "http://localhost:8765/api/broadcast"
@@ -158,6 +159,7 @@ def main():
     session_id = input_data.get("session_id", "default")
     tool_input = input_data.get("tool_input", {})
     command = tool_input.get("command", "")
+    cwd = input_data.get("cwd", getcwd())
 
     if not command:
         debug("No command found")
@@ -220,6 +222,7 @@ def main():
 
     broadcast_event(session_id, {
         "command": command,
+        "cwd": cwd,
         "risk": risk,
         "explanation": explanation,
         "permissionDecision": "allow"

@@ -105,6 +105,7 @@ else:
 - [x] Implement TUI + embedded chat
 - [x] Implement `deliberate pane`
 - [x] Update hooks copy + config wording for TUI
+- [x] Improve per-session pane behavior (anchor to cwd, include cwd in events)
 - [x] Tests green (`npm test`)
 - [ ] Manual WezTerm verification
 

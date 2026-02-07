@@ -1756,6 +1756,11 @@ def main():
         debug(f"Skipping trivial command: {command[:50]}")
         sys.exit(0)
 
+    # Claude Code provides the working directory in the hook payload. We use it
+    # both for consequence analysis and as an anchor so the TUI can auto-select
+    # the correct session for the current project.
+    cwd = input_data.get("cwd", os.getcwd())
+
     surfacing_mode = load_terminal_explanations_mode()
 
     # User custom blocklist, hard stop before any heavier analysis.
@@ -1764,6 +1769,7 @@ def main():
         explanation = f"Command matched your custom blocklist entry: {block_match}"
         broadcast_event("command_analyzed", session_id, {
             "command": command,
+            "cwd": cwd,
             "risk": "DANGEROUS",
             "explanation": explanation,
             "consequences": None,
@@ -1783,7 +1789,6 @@ def main():
     workflow_patterns = detect_workflow_patterns(history, command)
 
     # Check for destruction consequences
-    cwd = input_data.get("cwd", os.getcwd())
     destruction_consequences = get_destruction_consequences(command, cwd)
 
     # If we detect a dangerous workflow pattern, escalate immediately
@@ -1893,6 +1898,7 @@ def main():
     if risk == "SAFE" and not workflow_patterns:
         broadcast_event("command_analyzed", session_id, {
             "command": command,
+            "cwd": cwd,
             "risk": risk,
             "explanation": explanation,
             "consequences": destruction_consequences,
@@ -1936,6 +1942,7 @@ def main():
         if both_agree or script_analyzed:
             broadcast_event("command_analyzed", session_id, {
                 "command": command,
+                "cwd": cwd,
                 "risk": risk,
                 "explanation": explanation,
                 "consequences": destruction_consequences,
@@ -2031,6 +2038,7 @@ def main():
 
     broadcast_event("command_analyzed", session_id, {
         "command": command,
+        "cwd": cwd,
         "risk": risk,
         "explanation": explanation,
         "consequences": destruction_consequences,

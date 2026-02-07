@@ -129,6 +129,55 @@ deliberate install          # Install Claude Code hooks + OpenCode plugin, confi
 deliberate status           # Check installation
 deliberate classify "rm -rf /"   # Test classification → DANGEROUS
 deliberate serve            # Start classifier server (faster)
+deliberate pane             # Open Deliberate TUI in a split pane (WezTerm/tmux)
+deliberate tui              # Run Deliberate TUI in the current terminal
+deliberate gui              # Launch the desktop GUI (optional, for IDE harness work)
+```
+
+## Deliberate pane (TUI, recommended for Claude Code/OpenCode)
+
+Deliberate v2 is moving toward a terminal-native workflow. The TUI is designed to live in a side pane while your agent session runs on the left.
+
+It reads a local JSONL event log written by the hooks, so you still get history even if you start the pane after a session begins.
+
+In one terminal:
+
+```bash
+deliberate serve
+```
+
+Then open the pane:
+
+```bash
+deliberate pane
+```
+
+If you are not in a supported terminal pane manager, you can still run it in the current terminal:
+
+```bash
+deliberate tui
+```
+
+To reduce terminal noise, set `gui.terminalExplanations` in `~/.deliberate/config.json` to `"minimal"` (or `"gui"`). The hooks will keep the permission gate visible, but point you to the pane for details.
+
+Embedded chat works in the TUI. If you do not have keys configured, chat replies in mock mode.
+
+## Deliberate GUI (Desktop, optional)
+
+The desktop GUI is a Tauri app that shows hook output in a floating window. It is kept for future IDE/Antigravity harnesses and is not the recommended UX for Claude Code/OpenCode.
+
+From the repo checkout:
+
+```bash
+npm run gui:install
+npm run gui:build
+deliberate gui
+```
+
+If macOS blocks the app the first time you run it, the usual workaround is:
+
+```bash
+xattr -cr /path/to/Deliberate.app
 ```
 
 ## Training

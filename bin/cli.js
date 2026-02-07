@@ -9,8 +9,11 @@ import { install } from '../src/install.js';
 import { startServer } from '../src/server.js';
 import { classify, getStatus } from '../src/classifier/index.js';
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import path from 'path';
 import { homedir } from 'os';
+import { spawn } from 'child_process';
+import { fileURLToPath } from 'url';
+import { installGuiFromGithubRelease, getInstalledGuiPath } from '../src/gui-install.js';
 
 const program = new Command();
 
@@ -35,6 +38,102 @@ program
   });
 
 program
+  .command('gui')
+  .description('Launch the Deliberate desktop GUI (Tauri)')
+  .option('--dev', 'Run in dev mode (tauri dev)', false)
+  .option('--install', 'Download the GUI binary from GitHub Releases', false)
+  .option('--repo <repo>', 'GitHub repo for releases (owner/name)', 'the-radar/deliberate')
+  .option('--tag <tag>', 'Release tag (defaults to latest)', null)
+  .option('--asset-url <url>', 'Direct download URL for a GUI binary', null)
+  .action(async (options) => {
+    const __filename = fileURLToPath(import.meta.url);
+    const __dirname = path.dirname(__filename);
+    const repoRoot = path.join(__dirname, '..');
+    const guiDir = path.join(repoRoot, 'gui');
+
+    const run = (cmd, args, cwd) => new Promise((resolve, reject) => {
+      const child = spawn(cmd, args, { cwd, stdio: 'inherit' });
+      child.on('exit', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`${cmd} exited with code ${code}`));
+      });
+    });
+
+    const localBinary = path.join(guiDir, 'src-tauri', 'target', 'release', 'gui');
+    const installedBinary = getInstalledGuiPath();
+
+    const hasGuiDir = existsSync(guiDir);
+    const hasLocalBinary = hasGuiDir && existsSync(localBinary);
+    const hasInstalledBinary = existsSync(installedBinary);
+
+    if (options.install) {
+      const result = await installGuiFromGithubRelease({
+        repo: options.repo,
+        tag: options.tag,
+        assetUrl: options.assetUrl
+      });
+      console.log(`Installed GUI: ${result.assetName}`);
+      await run(result.installedPath, [], repoRoot);
+      return;
+    }
+
+    if (!options.dev && hasLocalBinary) {
+      await run(localBinary, [], guiDir);
+      return;
+    }
+
+    if (!options.dev && hasInstalledBinary) {
+      await run(installedBinary, [], repoRoot);
+      return;
+    }
+
+    if (options.dev) {
+      if (!hasGuiDir) {
+        throw new Error('GUI dev mode requires the repo checkout (missing gui/ directory)');
+      }
+      await run('npm', ['--prefix', guiDir, 'run', 'tauri', 'dev'], repoRoot);
+      return;
+    }
+
+    throw new Error('GUI is not installed. Run `deliberate gui --install` or build from source.');
+  });
+
+program
+  .command('tui')
+  .description('Run the Deliberate terminal UI (best for Claude Code/OpenCode)')
+  .option('--all', 'Show all sessions (default is latest)', false)
+  .option('--session <id>', 'Filter to a specific session id', null)
+  .option('--no-follow', 'Do not auto-follow new events')
+  .action(async (options) => {
+    const { runTui } = await import('../src/tui/index.js');
+    await runTui({
+      allSessions: options.all,
+      sessionId: options.session,
+      follow: options.follow
+    });
+  });
+
+program
+  .command('pane')
+  .description('Open the Deliberate TUI in a split pane when supported (WezTerm/tmux)')
+  .option('--percent <percent>', 'Pane width percentage (10-80)', '30')
+  .option('--direction <dir>', 'Split direction: right or left', 'right')
+  .option('--all', 'Show all sessions (default is latest)', false)
+  .option('--session <id>', 'Filter to a specific session id', null)
+  .option('--no-follow', 'Do not auto-follow new events')
+  .action(async (options) => {
+    const { openPane } = await import('../src/pane.js');
+    await openPane({
+      percent: options.percent,
+      direction: options.direction,
+      allSessions: options.all,
+      sessionId: options.session,
+      follow: options.follow,
+      cwd: process.cwd()
+    });
+  });
+
+program
   .command('classify <input>')
   .description('Classify a command or file change')
   .option('-t, --type <type>', 'Type of input: command, edit, write', 'command')
@@ -50,7 +149,7 @@ program
     console.log('Deliberate Status\n');
 
     // Check Claude Code hooks installation
-    const claudeSettingsPath = join(homedir(), '.claude', 'settings.json');
+    const claudeSettingsPath = path.join(homedir(), '.claude', 'settings.json');
     let hooksInstalled = false;
 
     if (existsSync(claudeSettingsPath)) {
@@ -86,11 +185,11 @@ program
     }
 
     // Check OpenCode plugin installation
-    const openCodeConfigDir = join(homedir(), '.config', 'opencode');
-    const openCodeConfigPaths = [join(openCodeConfigDir, 'opencode.json'), join(openCodeConfigDir, 'opencode.jsonc')];
+    const openCodeConfigDir = path.join(homedir(), '.config', 'opencode');
+    const openCodeConfigPaths = [path.join(openCodeConfigDir, 'opencode.json'), path.join(openCodeConfigDir, 'opencode.jsonc')];
     const openCodePluginPaths = [
-      join(openCodeConfigDir, 'plugins', 'deliberate.js'),
-      join(openCodeConfigDir, 'plugins', 'deliberate-changes.js')
+      path.join(openCodeConfigDir, 'plugins', 'deliberate.js'),
+      path.join(openCodeConfigDir, 'plugins', 'deliberate-changes.js')
     ];
 
     let openCodeInstalled = false;

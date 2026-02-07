@@ -27,6 +27,7 @@ from pathlib import Path
 
 # Configuration
 CLASSIFIER_URL = "http://localhost:8765/classify/command"
+BROADCAST_URL = "http://localhost:8765/api/broadcast"
 LLM_MODE = os.environ.get("DELIBERATE_LLM_MODE")
 
 # Support both plugin mode (CLAUDE_PLUGIN_ROOT) and npm install mode (~/.deliberate/)
@@ -89,6 +90,111 @@ def load_state(session_id: str) -> set:
         except (json.JSONDecodeError, IOError):
             return set()
     return set()
+
+def _event_log_dir() -> str:
+    """Directory for JSONL event logs used by the Deliberate TUI.
+
+    We intentionally store this under ~/.deliberate so it works for both
+    Claude Code hooks and other tools (OpenCode, future IDE harnesses).
+    """
+    override = os.environ.get("DELIBERATE_EVENT_LOG_DIR")
+    if override:
+        return override
+    return str(Path.home() / ".deliberate" / "events")
+
+
+def _event_log_path() -> str:
+    """Daily JSONL file path (UTC) for event logs."""
+    day = datetime.utcnow().strftime("%Y-%m-%d")
+    return os.path.join(_event_log_dir(), f"events-{day}.jsonl")
+
+
+def append_event_log(payload: dict) -> bool:
+    """Append a single event payload to the local JSONL event log.
+
+    This must be fast and fail-open, never blocking command execution.
+    """
+    try:
+        log_dir = _event_log_dir()
+        os.makedirs(log_dir, exist_ok=True)
+        file_path = _event_log_path()
+
+        line = json.dumps(payload, ensure_ascii=False) + "\n"
+
+        # Create with restrictive permissions when possible (0600).
+        # If the file already exists, permissions are left as-is.
+        fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                f.write(line)
+        finally:
+            # fdopen closes fd on exit, but keep this safe if anything goes sideways.
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return False
+
+
+def cleanup_old_event_logs(days: int = 7):
+    """Remove event logs older than N days (best-effort, runs 10% of the time)."""
+    if random.random() > 0.1:
+        return
+    try:
+        log_dir = _event_log_dir()
+        if not os.path.exists(log_dir):
+            return
+        current_time = datetime.now().timestamp()
+        cutoff = current_time - (days * 24 * 60 * 60)
+        for filename in os.listdir(log_dir):
+            if not filename.startswith("events-") or not filename.endswith(".jsonl"):
+                continue
+            file_path = os.path.join(log_dir, filename)
+            try:
+                if os.path.getmtime(file_path) < cutoff:
+                    os.remove(file_path)
+            except (OSError, IOError):
+                pass
+    except Exception:
+        pass
+
+
+def broadcast_event(event_type: str, session_id: str, data: dict):
+    """Fire-and-forget broadcast to Deliberate server.
+
+    This is intentionally fail-open so command execution is never blocked by
+    GUI transport issues.
+    """
+    try:
+        payload = {
+            "type": event_type,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "sessionId": session_id,
+            "data": data
+        }
+
+        # Local persistence for the TUI, independent of server availability.
+        # If local logging fails, the server can still persist the event.
+        logged = append_event_log(payload)
+        cleanup_old_event_logs()
+
+        headers = {"Content-Type": "application/json"}
+        if logged:
+            headers["X-Deliberate-Event-Logged"] = "1"
+
+        req = urllib.request.Request(
+            BROADCAST_URL,
+            data=json.dumps(payload).encode('utf-8'),
+            headers=headers,
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=0.5):  # nosec B310
+            pass
+    except Exception:
+        # Broadcast is additive only, never interfere with hook decisions.
+        pass
 
 
 # Workflow patterns that indicate dangerous sequences
@@ -962,6 +1068,23 @@ def load_dedup_config() -> bool:
     return _load_config().get("deduplication", {}).get("enabled", True)
 
 
+def load_terminal_explanations_mode() -> str:
+    """Load GUI terminal surfacing mode from config.
+
+    Modes:
+      - full: show full explanation in terminal (v1 behavior)
+      - minimal: show a short pointer in terminal, details in the Deliberate pane
+      - gui: same as minimal for PreToolUse (permission gate must stay visible)
+    """
+    try:
+        mode = (_load_config().get("gui", {}) or {}).get("terminalExplanations", "full")
+        if mode in ("full", "minimal", "gui"):
+            return mode
+    except Exception:
+        pass
+    return "full"
+
+
 # Default trivial commands that are TRULY safe - no abuse potential
 # These are skipped entirely (no analysis, no output) for performance
 # SECURITY: Commands that can read sensitive files (cat, head, tail, less, more),
@@ -1012,6 +1135,62 @@ def load_skip_commands() -> set:
         skip_set.discard(cmd)
 
     return skip_set
+
+
+def normalize_command_for_custom_lists(command: str) -> str:
+    """Normalize a command line for skip/block list matching.
+
+    We do a light normalization to reduce wrapper noise without trying to fully
+    parse shell syntax.
+    """
+    cmd = command.strip()
+
+    # Strip sudo wrapper.
+    if cmd.startswith("sudo "):
+        cmd = cmd[5:].strip()
+
+    # Strip `command ...` wrapper.
+    if cmd.startswith("command "):
+        cmd = cmd[8:].strip()
+
+    # Strip leading `env VAR=...` assignments.
+    if cmd.startswith("env "):
+        parts = cmd.split()
+        # Keep dropping VAR=... tokens until we hit the real command.
+        i = 1
+        while i < len(parts) and "=" in parts[i] and not parts[i].startswith(("-", "--")):
+            i += 1
+        cmd = " ".join(parts[i:]).strip() if i < len(parts) else ""
+
+    # Collapse whitespace.
+    cmd = re.sub(r"\s+", " ", cmd)
+    return cmd.lower()
+
+
+def load_custom_blocklist() -> list:
+    """Load custom blocklist patterns from config file."""
+    patterns = _load_config().get("customBlocklist", [])
+    if not isinstance(patterns, list):
+        return []
+    out = []
+    for p in patterns:
+        if isinstance(p, str) and p.strip():
+            out.append(p.strip())
+    return out
+
+
+def custom_blocklist_match(command: str, patterns: list) -> str | None:
+    """Return the matching pattern if command hits the custom blocklist."""
+    if not patterns:
+        return None
+    haystack = normalize_command_for_custom_lists(command)
+    if not haystack:
+        return None
+    for p in patterns:
+        needle = normalize_command_for_custom_lists(p)
+        if needle and needle in haystack:
+            return p
+    return None
 
 
 def has_dangerous_substitution(command: str) -> bool:
@@ -1078,6 +1257,10 @@ def extract_command_with_subcommand(cmd: str) -> str | None:
 
 def is_command_in_skip_set(cmd: str, skip_set: set) -> bool:
     """Check if a command is in the skip set (handles basenames and compound commands)."""
+    cmd_exact = cmd.strip()
+    if cmd_exact in skip_set:
+        return True
+
     cmd_name = extract_command_name(cmd)
     if not cmd_name:
         return False
@@ -1573,6 +1756,27 @@ def main():
         debug(f"Skipping trivial command: {command[:50]}")
         sys.exit(0)
 
+    surfacing_mode = load_terminal_explanations_mode()
+
+    # User custom blocklist, hard stop before any heavier analysis.
+    block_match = custom_blocklist_match(command, load_custom_blocklist())
+    if block_match:
+        explanation = f"Command matched your custom blocklist entry: {block_match}"
+        broadcast_event("command_analyzed", session_id, {
+            "command": command,
+            "risk": "DANGEROUS",
+            "explanation": explanation,
+            "consequences": None,
+            "workflowPatterns": [],
+            "backupPath": None,
+            "permissionDecision": "block"
+        })
+        if surfacing_mode == "full":
+            print(f"⛔ BLOCKED by Deliberate: {explanation}", file=sys.stderr)
+        else:
+            print("⛔ BLOCKED by Deliberate (details in Deliberate pane)", file=sys.stderr)
+        sys.exit(2)
+
     # Check command history for workflow patterns BEFORE individual analysis
     # Uses sliding window (default 3 commands) to avoid stale pattern matches
     history = load_command_history(session_id)
@@ -1687,6 +1891,15 @@ def main():
     # SAFE commands: auto-allow, PostToolUse will show info after execution
     # UNLESS a workflow pattern was detected - then we still need to warn
     if risk == "SAFE" and not workflow_patterns:
+        broadcast_event("command_analyzed", session_id, {
+            "command": command,
+            "risk": risk,
+            "explanation": explanation,
+            "consequences": destruction_consequences,
+            "workflowPatterns": workflow_patterns,
+            "backupPath": None,
+            "permissionDecision": "allow"
+        })
         debug(f"Auto-allowing SAFE command, cached for PostToolUse")
         sys.exit(0)
 
@@ -1721,8 +1934,20 @@ def main():
         script_analyzed = script_content is not None and llm_dangerous
 
         if both_agree or script_analyzed:
+            broadcast_event("command_analyzed", session_id, {
+                "command": command,
+                "risk": risk,
+                "explanation": explanation,
+                "consequences": destruction_consequences,
+                "workflowPatterns": workflow_patterns,
+                "backupPath": backup_path,
+                "permissionDecision": "block"
+            })
             # Auto-block with exit code 2 - cannot proceed
-            block_message = f"⛔ BLOCKED by Deliberate: {explanation}"
+            if surfacing_mode == "full":
+                block_message = f"⛔ BLOCKED by Deliberate: {explanation}"
+            else:
+                block_message = "⛔ BLOCKED by Deliberate (details in Deliberate pane)"
             print(block_message, file=sys.stderr)
             debug(f"Auto-blocked DANGEROUS command (classifier={classifier_dangerous}, llm={llm_dangerous}, script={script_content is not None})")
             sys.exit(2)
@@ -1746,23 +1971,29 @@ def main():
         emoji = "⚡"
         color = YELLOW
 
-    # User-facing message with branded formatting and colors
-    # Color the explanation text so it's not easy to skip
-    reason = f"{emoji} {BOLD}{CYAN}DELIBERATE{RESET} {BOLD}{color}[{risk}]{RESET}\n    {color}{explanation}{RESET}{llm_unavailable_warning}"
+    # User-facing message with branded formatting and colors.
+    # In minimal/gui surfacing modes we keep the permission gate visible, but we
+    # hide the full explanation in the terminal and surface it in the side pane.
+    if surfacing_mode in ("minimal", "gui"):
+        reason = f"{emoji} {BOLD}{CYAN}DELIBERATE{RESET} {BOLD}{color}[{risk}]{RESET}\n    {color}Details in Deliberate pane{RESET}"
+    else:
+        # Full terminal explanation (v1 behavior).
+        reason = f"{emoji} {BOLD}{CYAN}DELIBERATE{RESET} {BOLD}{color}[{risk}]{RESET}\n    {color}{explanation}{RESET}{llm_unavailable_warning}"
 
-    # Add workflow warning if patterns were detected
-    if workflow_warning:
-        reason += f"\n{RED}{workflow_warning}{RESET}"
-
-    # Add destruction consequences if we have them
-    if destruction_warning:
-        reason += f"\n{RED}{destruction_warning}{RESET}"
-
-    # Add backup notification if we created one
+    # Add workflow/destruction/backup context only in full terminal mode.
     backup_notice = ""
-    if backup_path:
-        backup_notice = f"\n\n💾 Auto-backup created: {backup_path}"
-        reason += f"\n{GREEN}{backup_notice}{RESET}"
+    if surfacing_mode == "full":
+        if workflow_warning:
+            reason += f"\n{RED}{workflow_warning}{RESET}"
+        if destruction_warning:
+            reason += f"\n{RED}{destruction_warning}{RESET}"
+        if backup_path:
+            backup_notice = f"\n\n💾 Auto-backup created: {backup_path}"
+            reason += f"\n{GREEN}{backup_notice}{RESET}"
+    else:
+        # Still include backup path in Claude context (and GUI event payload).
+        if backup_path:
+            backup_notice = f"\n\n💾 Auto-backup created: {backup_path}"
 
     # For Claude's context (shown in conversation)
     context = f"**Deliberate** [{risk}]: {explanation}{llm_unavailable_warning}"
@@ -1797,6 +2028,16 @@ def main():
             "additionalContext": context
         }
     }
+
+    broadcast_event("command_analyzed", session_id, {
+        "command": command,
+        "risk": risk,
+        "explanation": explanation,
+        "consequences": destruction_consequences,
+        "workflowPatterns": workflow_patterns,
+        "backupPath": backup_path,
+        "permissionDecision": "ask"
+    })
 
     print(json.dumps(output))
 

@@ -51,7 +51,13 @@ def load_dataset(path: Path) -> list[dict]:
 def generate_embeddings(model, commands: list[str]) -> np.ndarray:
     """Generate embeddings for a list of commands."""
     print(f"Generating embeddings for {len(commands)} commands...")
-    embeddings = model.encode(commands, show_progress_bar=True, convert_to_numpy=True)
+    # SentenceTransformer.encode performs internal length sorting. In some
+    # versions this reordering can leak through and return embeddings in a
+    # different order than the input list, which silently corrupts labels.
+    #
+    # Our dataset is small enough that batch_size=1 is acceptable and keeps
+    # the command->embedding mapping stable.
+    embeddings = model.encode(commands, show_progress_bar=True, batch_size=1, convert_to_numpy=True)
     return embeddings
 
 def build_malicious_db(data: list[dict], embeddings: np.ndarray) -> dict:
@@ -265,14 +271,18 @@ def main():
     # Load CmdCaliper model
     print(f"\nLoading CmdCaliper-{model_size} model ({model_config['hf_id']})...")
 
-    # Check for local model first
+    # Check for local model first. If we download, snapshot it locally so
+    # embeddings remain stable across future HuggingFace model updates.
     local_model_path = OUTPUT_DIR / f"cmdcaliper-{model_size}"
     if local_model_path.exists():
         print(f"  Using local model at {local_model_path}")
         model = SentenceTransformer(str(local_model_path))
     else:
-        print(f"  Downloading from HuggingFace...")
+        print("  Downloading from HuggingFace...")
         model = SentenceTransformer(model_config['hf_id'])
+        print(f"  Saving local snapshot to {local_model_path}...")
+        local_model_path.mkdir(parents=True, exist_ok=True)
+        model.save(str(local_model_path))
 
     print(f"Model loaded. Embedding dimension: {model.get_sentence_embedding_dimension()}")
 

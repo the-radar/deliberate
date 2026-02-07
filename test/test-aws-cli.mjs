@@ -187,8 +187,13 @@ async function runAWSTests() {
 
   console.log('\n' + '='.repeat(70));
 
-  // Exit with appropriate code
-  process.exit(results.failed > 0 ? 1 : 0);
+  // Exit with appropriate code (avoid hard process exit, which can interrupt
+  // native cleanup in downstream ML runtimes).
+  await classifier.close();
+  process.exitCode = results.failed > 0 ? 1 : 0;
 }
 
-runAWSTests().catch(console.error);
+runAWSTests().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});

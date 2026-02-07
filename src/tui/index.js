@@ -1,0 +1,681 @@
+/**
+ * Deliberate Terminal UI (TUI)
+ *
+ * Goal: keep Deliberate "in the terminal" for Claude Code/OpenCode workflows.
+ * The TUI is meant to live in a split pane (WezTerm/tmux) and stay always-on.
+ *
+ * Data source: local JSONL event log written by hooks (see src/event-log.js).
+ *
+ * This file intentionally avoids fancy abstractions. It's a single-process
+ * terminal app with a small set of keyboard-driven actions.
+ */
+
+import blessed from 'blessed';
+import { spawn } from 'child_process';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+import { loadConfig, addSkipCommand, addCustomBlock } from '../config.js';
+import { readRecentEvents, tailEventLog } from '../event-log.js';
+import { streamChat } from '../chat-client.js';
+
+function isTty() {
+  return Boolean(process.stdout.isTTY && process.stdin.isTTY);
+}
+
+function truncate(value, max) {
+  const str = String(value ?? '');
+  if (str.length <= max) return str;
+  return `${str.slice(0, Math.max(0, max - 1))}…`;
+}
+
+function formatClock(iso) {
+  try {
+    const date = iso ? new Date(iso) : new Date();
+    const hh = String(date.getHours()).padStart(2, '0');
+    const mm = String(date.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  } catch {
+    return '--:--';
+  }
+}
+
+function riskOf(event) {
+  const risk = event?.data?.risk;
+  if (risk === 'SAFE' || risk === 'DANGEROUS' || risk === 'MODERATE') return risk;
+  return 'MODERATE';
+}
+
+function titleOf(event) {
+  const type = String(event?.type || '');
+  if (type === 'file_change_analyzed') {
+    return event?.data?.relativePath || event?.data?.filePath || '(file change)';
+  }
+  return event?.data?.command || '(command)';
+}
+
+function summarizeEvent(event, width = 80) {
+  const clock = formatClock(event?.timestamp);
+  const risk = riskOf(event);
+  const label = risk === 'DANGEROUS' ? 'D' : risk === 'SAFE' ? 'S' : 'M';
+  const prefix = `${clock} [${label}] `;
+  return `${prefix}${truncate(titleOf(event), Math.max(10, width - prefix.length))}`;
+}
+
+function prettyJson(value) {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function detailsForEvent(event) {
+  if (!event) return 'No selection.';
+
+  const lines = [];
+  lines.push(`type: ${event.type || ''}`);
+  lines.push(`time: ${event.timestamp || ''}`);
+  lines.push(`session: ${event.sessionId || ''}`);
+  lines.push(`risk: ${riskOf(event)}`);
+
+  const data = event.data || {};
+
+  if (typeof data.command === 'string') {
+    lines.push('');
+    lines.push('command:');
+    lines.push(data.command);
+  }
+
+  if (typeof data.relativePath === 'string' || typeof data.filePath === 'string') {
+    lines.push('');
+    lines.push('file:');
+    lines.push(String(data.relativePath || data.filePath));
+  }
+
+  if (typeof data.explanation === 'string' && data.explanation.trim()) {
+    lines.push('');
+    lines.push('explanation:');
+    lines.push(data.explanation.trim());
+  }
+
+  if (data.consequences) {
+    lines.push('');
+    lines.push('consequences:');
+    lines.push(prettyJson(data.consequences));
+  }
+
+  if (Array.isArray(data.workflowPatterns) && data.workflowPatterns.length) {
+    lines.push('');
+    lines.push('workflowPatterns:');
+    lines.push(prettyJson(data.workflowPatterns));
+  }
+
+  if (data.backupPath) {
+    lines.push('');
+    lines.push(`backupPath: ${String(data.backupPath)}`);
+  }
+
+  return lines.join('\n');
+}
+
+function buildSessions(events) {
+  const bySession = new Map();
+  for (const ev of events) {
+    const id = String(ev?.sessionId || '');
+    if (!id) continue;
+    const prev = bySession.get(id);
+    if (!prev || String(ev.timestamp || '').localeCompare(String(prev.lastTimestamp || '')) > 0) {
+      bySession.set(id, { sessionId: id, lastTimestamp: ev.timestamp || '' });
+    }
+  }
+  return Array.from(bySession.values())
+    .sort((a, b) => String(a.lastTimestamp).localeCompare(String(b.lastTimestamp)));
+}
+
+function buildCounts(events) {
+  const out = { total: events.length, safe: 0, moderate: 0, dangerous: 0 };
+  for (const ev of events) {
+    const risk = riskOf(ev);
+    if (risk === 'SAFE') out.safe += 1;
+    else if (risk === 'DANGEROUS') out.dangerous += 1;
+    else out.moderate += 1;
+  }
+  return out;
+}
+
+async function checkServerHealth(baseUrl) {
+  const url = `${String(baseUrl || '').replace(/\/$/, '')}/health`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 600);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return { ok: false };
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function startServerDetached({ port } = {}) {
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = path.dirname(__filename);
+  const repoRoot = path.join(__dirname, '..', '..');
+  const serverPath = path.join(repoRoot, 'src', 'server.js');
+
+  const child = spawn(process.execPath, [serverPath], {
+    detached: true,
+    stdio: 'ignore',
+    env: {
+      ...process.env,
+      PORT: port ? String(port) : process.env.PORT
+    }
+  });
+  child.unref();
+}
+
+function contextForChat(event) {
+  const data = event?.data || {};
+
+  // Chat is most useful for commands, but we still provide basic context for
+  // file change events.
+  const command = typeof data.command === 'string'
+    ? data.command
+    : (data.relativePath || data.filePath ? `file change: ${data.relativePath || data.filePath}` : '');
+
+  return {
+    command,
+    risk: riskOf(event),
+    explanation: typeof data.explanation === 'string' ? data.explanation : '',
+    consequences: data.consequences && typeof data.consequences === 'object' ? data.consequences : null
+  };
+}
+
+export async function runTui(options = {}) {
+  if (!isTty()) {
+    console.error('deliberate tui requires an interactive TTY');
+    process.exitCode = 1;
+    return;
+  }
+
+  const config = loadConfig();
+  const serverBaseUrl = config.gui?.serverBaseUrl || 'http://localhost:8765';
+  const serverPort = config.classifier?.serverPort || 8765;
+
+  const state = {
+    follow: options.follow ?? true,
+    allSessions: options.allSessions ?? false,
+    sessionId: options.sessionId || null,
+    events: readRecentEvents({ days: 2, maxEventsPerFile: 2000 }),
+    serverOk: false,
+    statusMessage: ''
+  };
+
+  const sessions = buildSessions(state.events);
+  const latest = sessions.length ? sessions[sessions.length - 1].sessionId : null;
+
+  if (!state.allSessions && !state.sessionId) {
+    state.sessionId = latest;
+  }
+
+  const screen = blessed.screen({
+    smartCSR: true,
+    fullUnicode: true,
+    title: 'Deliberate'
+  });
+
+  const HEADER_HEIGHT = 3;
+  const FOOTER_HEIGHT = 1;
+
+  const computeLayout = () => {
+    const total = typeof screen.height === 'number' ? screen.height : 40;
+    const detailsHeight = Math.max(10, Math.min(20, Math.floor(total * 0.4)));
+    const listHeight = Math.max(6, total - HEADER_HEIGHT - FOOTER_HEIGHT - detailsHeight);
+    return {
+      listTop: HEADER_HEIGHT,
+      listHeight,
+      detailsTop: HEADER_HEIGHT + listHeight,
+      detailsHeight
+    };
+  };
+
+  let layout = computeLayout();
+
+  const header = blessed.box({
+    parent: screen,
+    top: 0,
+    left: 0,
+    height: HEADER_HEIGHT,
+    width: '100%',
+    tags: false,
+    style: { fg: 'white', bg: 'black' }
+  });
+
+  const list = blessed.list({
+    parent: screen,
+    top: layout.listTop,
+    left: 0,
+    width: '100%',
+    height: layout.listHeight,
+    keys: true,
+    vi: true,
+    mouse: true,
+    border: 'line',
+    label: ' events ',
+    style: {
+      border: { fg: 'gray' },
+      selected: { bg: 'blue', fg: 'white' }
+    },
+    scrollbar: { ch: ' ', track: { bg: 'gray' }, style: { bg: 'white' } }
+  });
+
+  const details = blessed.box({
+    parent: screen,
+    top: layout.detailsTop,
+    left: 0,
+    width: '100%',
+    height: layout.detailsHeight,
+    border: 'line',
+    label: ' details ',
+    scrollable: true,
+    alwaysScroll: true,
+    keys: true,
+    vi: true,
+    mouse: true,
+    style: {
+      border: { fg: 'gray' }
+    }
+  });
+
+  const footer = blessed.box({
+    parent: screen,
+    bottom: 0,
+    left: 0,
+    height: FOOTER_HEIGHT,
+    width: '100%',
+    style: { fg: 'gray', bg: 'black' }
+  });
+
+  const helpText = () => [
+    '↑/↓ navigate',
+    'a all',
+    'n next session',
+    'f follow',
+    's skip',
+    'b block',
+    'd discuss',
+    'S start server',
+    'q quit'
+  ].join(' | ');
+
+  let filtered = [];
+  let selectedIndex = 0;
+  let stopTail = null;
+  let healthTimer = null;
+
+  const renderHeader = () => {
+    const sessionLabel = state.allSessions
+      ? 'all'
+      : (state.sessionId ? truncate(state.sessionId, 32) : 'none');
+    const counts = buildCounts(filtered);
+    const serverDot = state.serverOk ? '●' : '○';
+    const followLabel = state.follow ? 'follow' : 'paused';
+
+    const line1 = `Deliberate  session=${sessionLabel}  total=${counts.total}  safe=${counts.safe}  mod=${counts.moderate}  danger=${counts.dangerous}`;
+    const line2 = `server=${serverBaseUrl}  ${serverDot}  ${followLabel}`;
+    const line3 = state.statusMessage ? state.statusMessage : '';
+
+    header.setContent([line1, line2, line3].join('\n'));
+  };
+
+  const applyFilter = () => {
+    if (state.allSessions || !state.sessionId) {
+      filtered = state.events.slice();
+    } else {
+      filtered = state.events.filter((e) => String(e.sessionId || '') === String(state.sessionId));
+    }
+  };
+
+  const renderList = ({ keepSelection = true } = {}) => {
+    const width = typeof list.width === 'number' ? list.width : screen.width;
+    const items = filtered.map((ev) => summarizeEvent(ev, width - 6));
+    list.setItems(items);
+
+    if (!keepSelection) {
+      selectedIndex = Math.max(0, items.length - 1);
+    } else {
+      selectedIndex = Math.min(selectedIndex, Math.max(0, items.length - 1));
+    }
+
+    if (items.length) {
+      list.select(selectedIndex);
+    }
+  };
+
+  const renderDetails = () => {
+    const event = filtered[selectedIndex] || null;
+    details.setContent(detailsForEvent(event));
+    details.setScrollPerc(0);
+  };
+
+  const renderAll = (opts = {}) => {
+    applyFilter();
+    renderHeader();
+    renderList(opts);
+    renderDetails();
+    footer.setContent(helpText());
+    screen.render();
+  };
+
+  const setStatus = (msg, { ttlMs = 2500 } = {}) => {
+    state.statusMessage = truncate(msg, 200);
+    renderHeader();
+    screen.render();
+    if (ttlMs > 0) {
+      setTimeout(() => {
+        if (state.statusMessage === msg) {
+          state.statusMessage = '';
+          renderHeader();
+          screen.render();
+        }
+      }, ttlMs).unref?.();
+    }
+  };
+
+  const cycleSession = (delta) => {
+    const listSessions = buildSessions(state.events);
+    if (!listSessions.length) return;
+
+    if (state.allSessions) state.allSessions = false;
+
+    const ids = listSessions.map((s) => s.sessionId);
+    const currentIdx = state.sessionId ? ids.indexOf(state.sessionId) : -1;
+    const nextIdx = currentIdx >= 0 ? (currentIdx + delta + ids.length) % ids.length : ids.length - 1;
+    state.sessionId = ids[nextIdx];
+    selectedIndex = 0;
+    renderAll({ keepSelection: false });
+  };
+
+  const handleSelect = (idx) => {
+    selectedIndex = typeof idx === 'number' ? idx : list.selected;
+    renderDetails();
+    renderHeader();
+    screen.render();
+  };
+
+  list.on('select item', (_, idx) => handleSelect(idx));
+  list.on('select', (_, idx) => handleSelect(idx));
+
+  screen.on('resize', () => {
+    layout = computeLayout();
+    list.top = layout.listTop;
+    list.height = layout.listHeight;
+    details.top = layout.detailsTop;
+    details.height = layout.detailsHeight;
+    screen.render();
+  });
+
+  screen.key(['q', 'C-c'], () => {
+    stopTail?.();
+    if (healthTimer) clearInterval(healthTimer);
+    screen.destroy();
+    process.exit(0);
+  });
+
+  screen.key(['a'], () => {
+    state.allSessions = !state.allSessions;
+    if (!state.allSessions && !state.sessionId) {
+      state.sessionId = latest;
+    }
+    selectedIndex = 0;
+    renderAll({ keepSelection: false });
+  });
+
+  screen.key(['n'], () => cycleSession(1));
+  screen.key(['p'], () => cycleSession(-1));
+
+  screen.key(['f'], () => {
+    state.follow = !state.follow;
+    setStatus(state.follow ? 'follow enabled' : 'follow paused');
+  });
+
+  screen.key(['r'], () => {
+    state.events = readRecentEvents({ days: 2, maxEventsPerFile: 2000 });
+    selectedIndex = 0;
+    renderAll({ keepSelection: false });
+    setStatus('reloaded');
+  });
+
+  screen.key(['S'], async () => {
+    const health = await checkServerHealth(serverBaseUrl);
+    if (health.ok) {
+      setStatus('server already running');
+      state.serverOk = true;
+      renderHeader();
+      screen.render();
+      return;
+    }
+
+    startServerDetached({ port: serverPort });
+    setStatus('starting server…');
+  });
+
+  screen.key(['s'], () => {
+    const event = filtered[selectedIndex];
+    const command = event?.data?.command;
+    if (typeof command !== 'string' || !command.trim()) {
+      setStatus('skip: no command selected');
+      return;
+    }
+    try {
+      addSkipCommand(command);
+      setStatus('added to skip list');
+    } catch {
+      setStatus('skip failed');
+    }
+  });
+
+  screen.key(['b'], () => {
+    const event = filtered[selectedIndex];
+    const command = event?.data?.command;
+    if (typeof command !== 'string' || !command.trim()) {
+      setStatus('block: no command selected');
+      return;
+    }
+    try {
+      addCustomBlock(command);
+      setStatus('added to block list');
+    } catch {
+      setStatus('block failed');
+    }
+  });
+
+  const openChat = () => {
+    const event = filtered[selectedIndex];
+    if (!event) {
+      setStatus('no selection');
+      return;
+    }
+
+    const overlay = blessed.box({
+      parent: screen,
+      top: 'center',
+      left: 'center',
+      width: '98%',
+      height: '98%',
+      border: 'line',
+      label: ' discuss (esc to close) ',
+      style: { border: { fg: 'gray' } }
+    });
+
+    const chatLog = blessed.box({
+      parent: overlay,
+      top: 0,
+      left: 0,
+      width: '100%',
+      bottom: 3,
+      scrollable: true,
+      alwaysScroll: true,
+      keys: true,
+      vi: true,
+      mouse: true,
+      style: { fg: 'white' }
+    });
+
+    const chatInput = blessed.textbox({
+      parent: overlay,
+      bottom: 0,
+      left: 0,
+      width: '100%',
+      height: 3,
+      border: 'line',
+      label: ' message ',
+      inputOnFocus: true,
+      style: {
+        border: { fg: 'gray' },
+        focus: { border: { fg: 'white' } }
+      }
+    });
+
+    const messages = [];
+    let streamingAbort = null;
+
+    const renderChat = () => {
+      const chunks = [];
+      for (const msg of messages) {
+        const role = msg.role === 'assistant' ? 'assistant' : 'user';
+        chunks.push(`${role}: ${msg.content || ''}`.trimEnd());
+        chunks.push('');
+      }
+      chatLog.setContent(chunks.join('\n'));
+      chatLog.setScrollPerc(100);
+      screen.render();
+    };
+
+    const close = () => {
+      try {
+        streamingAbort?.abort();
+      } catch {
+        // ignore
+      }
+      overlay.detach();
+      screen.render();
+      list.focus();
+    };
+
+    overlay.key(['escape'], close);
+    chatLog.key(['escape'], close);
+    chatInput.key(['escape'], close);
+
+    chatInput.on('submit', async (value) => {
+      const text = String(value || '').trim();
+      chatInput.clearValue();
+      screen.render();
+      if (!text) {
+        chatInput.focus();
+        return;
+      }
+
+      messages.push({ role: 'user', content: text });
+      messages.push({ role: 'assistant', content: '' });
+      renderChat();
+
+      const assistantIdx = messages.length - 1;
+      const controller = new AbortController();
+      streamingAbort = controller;
+
+      const apiMessages = messages
+        .slice(0, assistantIdx) // exclude placeholder assistant
+        .map((m) => ({ role: m.role, content: m.content }));
+
+      try {
+        await streamChat({
+          messages: apiMessages,
+          context: contextForChat(event),
+          signal: controller.signal,
+          onEvent: (ev) => {
+            if (controller.signal.aborted) return;
+            if (!ev || typeof ev !== 'object') return;
+
+            if (ev.type === 'token') {
+              messages[assistantIdx].content += ev.text;
+              renderChat();
+              return;
+            }
+
+            if (ev.type === 'error') {
+              messages[assistantIdx].content += `\n\n[error] ${ev.message || 'unknown error'}`;
+              renderChat();
+            }
+          }
+        });
+      } finally {
+        streamingAbort = null;
+        chatInput.focus();
+      }
+    });
+
+    messages.push({
+      role: 'assistant',
+      content: 'Ask anything about the selected command/change. If you do not have keys configured, Deliberate will reply in mock mode.'
+    });
+    renderChat();
+
+    chatInput.focus();
+    screen.render();
+  };
+
+  screen.key(['d'], openChat);
+
+  // Initial render.
+  renderAll({ keepSelection: false });
+  list.focus();
+
+  // Server health polling (UI-only).
+  state.serverOk = (await checkServerHealth(serverBaseUrl)).ok;
+  renderHeader();
+  screen.render();
+
+  healthTimer = setInterval(async () => {
+    const result = await checkServerHealth(serverBaseUrl);
+    if (result.ok !== state.serverOk) {
+      state.serverOk = result.ok;
+      renderHeader();
+      screen.render();
+    }
+  }, 3000);
+  healthTimer.unref?.();
+
+  // Live updates from the event log.
+  stopTail = tailEventLog({
+    intervalMs: 250,
+    onEvent: (ev) => {
+      if (!ev || typeof ev !== 'object') return;
+
+      state.events.push(ev);
+      if (state.events.length > 10_000) {
+        state.events = state.events.slice(state.events.length - 10_000);
+      }
+
+      const matches = state.allSessions || !state.sessionId || String(ev.sessionId || '') === String(state.sessionId);
+      if (!matches) {
+        // Still update header counts by re-filtering occasionally.
+        renderHeader();
+        screen.render();
+        return;
+      }
+
+      // For follow mode, keep selection at the bottom. If the user navigated up
+      // and disabled follow, leave selection alone.
+      const keepSelection = !state.follow;
+      if (!keepSelection) {
+        selectedIndex = filtered.length; // will become last after render
+      }
+      renderAll({ keepSelection });
+    }
+  });
+}
+
+export default { runTui };

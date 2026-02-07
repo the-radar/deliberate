@@ -140,7 +140,12 @@ async function runEdgeCaseTests() {
     }
   }
 
-  process.exit(failed > 0 ? 1 : 0);
+  // Avoid hard process exit to reduce native teardown crashes.
+  await classifier.close();
+  process.exitCode = failed > 0 ? 1 : 0;
 }
 
-runEdgeCaseTests().catch(console.error);
+runEdgeCaseTests().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});

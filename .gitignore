@@ -6,3 +6,10 @@ models/
 .DS_Store
 __pycache__/
 CONTINUITY.md
+thoughts/
+
+# GUI build artifacts
+gui/build/
+gui/.svelte-kit/
+gui/dist/
+gui/src-tauri/target/

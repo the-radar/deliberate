@@ -20,7 +20,9 @@ import { readFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir, platform } from 'os';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
+import crypto from 'crypto';
+import { PatternMatcher } from './pattern-matcher.js';
 
 // Configure Transformers.js for local caching
 env.cacheDir = process.env.TRANSFORMERS_CACHE || './.cache/transformers';
@@ -68,6 +70,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const MODELS_DIR = join(__dirname, '..', '..', 'models');
 const CLASSIFY_SCRIPT = join(__dirname, 'classify_command.py');
+const WORKER_SCRIPT = join(__dirname, 'cmdcaliper_worker.py');
 
 /**
  * Escape a string for safe use in shell commands
@@ -138,6 +141,37 @@ export class ModelClassifier {
     this.commandReady = false;
     this.contentReady = false;
     this.initPromises = {};
+
+    // Long-lived Python worker for command classification.
+    // This is critical for performance, spawning Python per command is too slow.
+    this.pythonWorker = null;
+    this.pythonWorkerBuffer = '';
+    this.pythonWorkerPending = new Map(); // id -> { resolve, reject, timeout }
+
+    // Reuse a single pattern matcher to short-circuit obvious cases.
+    this.patternMatcher = new PatternMatcher();
+  }
+
+  /**
+   * Shutdown background resources (mainly the Python CmdCaliper worker).
+   * This is used by tests and long-running processes for clean teardown.
+   */
+  async close() {
+    if (this.pythonWorker && this.pythonWorker.exitCode === null) {
+      try {
+        this.pythonWorker.kill();
+      } catch {
+        // Ignore shutdown errors.
+      }
+    }
+    this.pythonWorker = null;
+    this.pythonWorkerBuffer = '';
+
+    for (const [id, pending] of this.pythonWorkerPending.entries()) {
+      clearTimeout(pending.timeout);
+      pending.reject(new Error('CmdCaliper worker closed'));
+      this.pythonWorkerPending.delete(id);
+    }
   }
 
   /**
@@ -185,23 +219,12 @@ export class ModelClassifier {
         console.log(`[ModelClassifier] Loading CmdCaliper-${modelSize} model for command analysis...`);
 
         // Verify Python script exists
-        if (!existsSync(CLASSIFY_SCRIPT)) {
-          throw new Error(`Classification script not found: ${CLASSIFY_SCRIPT}`);
+        if (!existsSync(WORKER_SCRIPT)) {
+          throw new Error(`CmdCaliper worker script not found: ${WORKER_SCRIPT}`);
         }
 
-        // Test that the Python script works by classifying a simple command
-        const testResult = execSync(
-          `${PYTHON_CMD} "${CLASSIFY_SCRIPT}" --base64 "${safeShellArg('echo test')}" --model ${modelSize}`,
-          {
-            encoding: 'utf-8',
-            timeout: 60000  // First run may need to load model
-          }
-        );
-
-        const parsed = JSON.parse(testResult);
-        if (parsed.error) {
-          throw new Error(parsed.error);
-        }
+        await this._ensurePythonWorker(modelSize);
+        await this._classifyWithPythonWorker('echo test');
 
         console.log(`[ModelClassifier] CmdCaliper-${modelSize} + RandomForest loaded successfully`);
         this.commandReady = true;
@@ -232,6 +255,12 @@ export class ModelClassifier {
           {
             dtype: MODELS.content.dtype,
             device: "cpu",
+            // Keep the runtime single-threaded for stability.
+            // This mitigates sporadic teardown crashes in some environments.
+            session_options: {
+              intraOpNumThreads: 1,
+              interOpNumThreads: 1
+            },
             progress_callback: (progress) => {
               if (progress.status === 'downloading') {
                 const pct = Math.round((progress.loaded / progress.total) * 100);
@@ -329,35 +358,135 @@ export class ModelClassifier {
   }
 
   /**
-   * Classify a command using the Python CmdCaliper + RandomForest script
+   * Start (or reuse) the long-lived CmdCaliper worker process.
    * @private
-   * @param {string} command - The command to classify
-   * @returns {Object} - Classification result from Python
+   * @param {string} modelSize
    */
-  _classifyWithPython(command) {
-    const b64Command = safeShellArg(command);
+  async _ensurePythonWorker(modelSize) {
+    if (this.pythonWorker && this.pythonWorker.exitCode === null) {
+      return;
+    }
+
+    const child = spawn(PYTHON_CMD, [WORKER_SCRIPT], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        PYTHONWARNINGS: process.env.PYTHONWARNINGS || 'ignore',
+        // Avoid per-project cache writes that can fail under restrictive environments.
+        PYTHONPYCACHEPREFIX: process.env.PYTHONPYCACHEPREFIX || '/tmp'
+      }
+    });
+
+    this.pythonWorker = child;
+    this.pythonWorkerBuffer = '';
+
+    child.stdout.setEncoding('utf-8');
+    child.stdout.on('data', (chunk) => this._onPythonWorkerStdout(chunk));
+    child.stderr.setEncoding('utf-8');
+    child.stderr.on('data', () => {
+      // Intentionally ignore stderr to avoid leaking sensitive command content.
+      // Failures are returned through the JSON protocol.
+    });
+
+    child.on('exit', () => {
+      for (const [id, pending] of this.pythonWorkerPending.entries()) {
+        clearTimeout(pending.timeout);
+        pending.reject(new Error('CmdCaliper worker exited'));
+        this.pythonWorkerPending.delete(id);
+      }
+    });
+
+    // Wait for init handshake.
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('CmdCaliper worker init timeout')), 60000);
+      this.pythonWorkerPending.set('init', {
+        resolve: () => {
+          clearTimeout(timeout);
+          this.pythonWorkerPending.delete('init');
+          resolve();
+        },
+        reject: (err) => {
+          clearTimeout(timeout);
+          this.pythonWorkerPending.delete('init');
+          reject(err);
+        },
+        timeout
+      });
+    });
+
+    // Prime with a trivial request so model is loaded.
+    await this._classifyWithPythonWorker('echo test', modelSize);
+  }
+
+  /**
+   * Handle stdout JSONL from the Python worker.
+   * @private
+   * @param {string} chunk
+   */
+  _onPythonWorkerStdout(chunk) {
+    this.pythonWorkerBuffer += chunk;
+    const lines = this.pythonWorkerBuffer.split('\n');
+    this.pythonWorkerBuffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+
+      const id = msg?.id;
+      if (!id) continue;
+      const pending = this.pythonWorkerPending.get(id);
+      if (!pending) continue;
+
+      clearTimeout(pending.timeout);
+      this.pythonWorkerPending.delete(id);
+
+      if (msg.ok) {
+        pending.resolve(msg.result);
+      } else {
+        pending.reject(new Error(msg.error || 'CmdCaliper worker error'));
+      }
+    }
+  }
+
+  /**
+   * Classify a command using the long-lived Python worker.
+   * @private
+   * @param {string} command
+   * @param {string} [modelSize]
+   * @returns {Promise<any>}
+   */
+  _classifyWithPythonWorker(command, modelSize) {
+    if (!this.pythonWorker || this.pythonWorker.exitCode !== null) {
+      throw new Error('CmdCaliper worker not running');
+    }
 
     // Validate model size to prevent injection
     const validModels = ['small', 'base', 'large'];
-    const modelSize = validModels.includes(MODELS.commandModel)
-      ? MODELS.commandModel
+    const resolvedModelSize = validModels.includes(modelSize || MODELS.commandModel)
+      ? (modelSize || MODELS.commandModel)
       : 'base';
 
-    const result = execSync(
-      `${PYTHON_CMD} "${CLASSIFY_SCRIPT}" --base64 "${b64Command}" --model ${modelSize}`,
-      {
-        encoding: 'utf-8',
-        timeout: 30000,  // 30 second timeout (first run loads model)
-        maxBuffer: 1024 * 1024  // 1MB buffer
-      }
-    );
+    const id = crypto.randomBytes(16).toString('hex');
+    const payload = {
+      id,
+      command_b64: safeShellArg(command),
+      model: resolvedModelSize
+    };
 
-    const parsed = JSON.parse(result);
-    if (parsed.error) {
-      throw new Error(parsed.error);
-    }
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pythonWorkerPending.delete(id);
+        reject(new Error('CmdCaliper worker request timeout'));
+      }, 30000);
 
-    return parsed;
+      this.pythonWorkerPending.set(id, { resolve, reject, timeout });
+      this.pythonWorker.stdin.write(`${JSON.stringify(payload)}\n`);
+    });
   }
 
   /**
@@ -381,6 +510,19 @@ export class ModelClassifier {
    * @property {string} nearestLabel - Label of nearest training command
    */
   async classifyCommand(command) {
+    // Pattern matcher is authoritative for known cases, and avoids expensive ML.
+    const pattern = this.patternMatcher.checkCommand(command);
+    if (pattern.matched) {
+      return {
+        risk: pattern.risk,
+        score: pattern.risk === 'SAFE' ? 0.99 : 1.0,
+        reason: pattern.reason,
+        source: 'pattern',
+        canOverride: pattern.canOverride ?? false,
+        needsLlmFallback: false
+      };
+    }
+
     // Check if ML classification is disabled
     if (!MODELS.commandModel) {
       return {
@@ -398,8 +540,8 @@ export class ModelClassifier {
     }
 
     try {
-      // Classify using Python (CmdCaliper + RandomForest)
-      const result = this._classifyWithPython(command);
+      // Classify using Python worker (CmdCaliper + classifier head)
+      const result = await this._classifyWithPythonWorker(command);
 
       return {
         risk: result.risk,

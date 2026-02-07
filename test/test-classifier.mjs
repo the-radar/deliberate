@@ -150,11 +150,16 @@ async function runTests() {
 
   if (commandFailed + contentFailed === 0) {
     console.log('\n✨ All tests passed!\n');
-    process.exit(0);
+    await classifier.close();
+    process.exitCode = 0;
   } else {
     console.log(`\n⚠️  ${commandFailed + contentFailed} tests failed\n`);
-    process.exit(1);
+    await classifier.close();
+    process.exitCode = 1;
   }
 }
 
-runTests().catch(console.error);
+runTests().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});

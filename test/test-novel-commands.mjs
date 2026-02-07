@@ -281,7 +281,12 @@ async function runNovelTests() {
 
   console.log('\n' + '='.repeat(70));
 
-  process.exit(totalFailed > 0 ? 1 : 0);
+  // Avoid hard process exit to reduce native teardown crashes.
+  await classifier.close();
+  process.exitCode = totalFailed > 0 ? 1 : 0;
 }
 
-runNovelTests().catch(console.error);
+runNovelTests().catch((err) => {
+  console.error(err);
+  process.exitCode = 1;
+});

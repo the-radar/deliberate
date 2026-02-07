@@ -22,6 +22,7 @@ from pathlib import Path
 # Configuration
 CLASSIFIER_WRITE_URL = "http://localhost:8765/classify/write"
 CLASSIFIER_EDIT_URL = "http://localhost:8765/classify/edit"
+BROADCAST_URL = "http://localhost:8765/api/broadcast"
 
 # Support both plugin mode (CLAUDE_PLUGIN_ROOT) and npm install mode (~/.deliberate/)
 # Plugin mode: config in plugin directory
@@ -100,6 +101,64 @@ def save_state(session_id: str, shown_warnings: set):
         pass
 
 
+def _event_log_dir() -> str:
+    """Directory for JSONL event logs used by the Deliberate TUI."""
+    override = os.environ.get("DELIBERATE_EVENT_LOG_DIR")
+    if override:
+        return override
+    return str(Path.home() / ".deliberate" / "events")
+
+
+def _event_log_path() -> str:
+    """Daily JSONL file path (UTC) for event logs."""
+    day = datetime.utcnow().strftime("%Y-%m-%d")
+    return os.path.join(_event_log_dir(), f"events-{day}.jsonl")
+
+
+def append_event_log(payload: dict) -> bool:
+    """Append event payload to local JSONL log (fail-open)."""
+    try:
+        log_dir = _event_log_dir()
+        os.makedirs(log_dir, exist_ok=True)
+        file_path = _event_log_path()
+        line = json.dumps(payload, ensure_ascii=False) + "\n"
+        fd = os.open(file_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            with os.fdopen(fd, "a", encoding="utf-8") as f:
+                f.write(line)
+        finally:
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        return True
+    except Exception:
+        return False
+
+
+def cleanup_old_event_logs(days: int = 7):
+    """Remove event logs older than N days (best-effort, runs 10% of the time)."""
+    if random.random() > 0.1:
+        return
+    try:
+        log_dir = _event_log_dir()
+        if not os.path.exists(log_dir):
+            return
+        current_time = datetime.now().timestamp()
+        cutoff = current_time - (days * 24 * 60 * 60)
+        for filename in os.listdir(log_dir):
+            if not filename.startswith("events-") or not filename.endswith(".jsonl"):
+                continue
+            file_path = os.path.join(log_dir, filename)
+            try:
+                if os.path.getmtime(file_path) < cutoff:
+                    os.remove(file_path)
+            except (OSError, IOError):
+                pass
+    except Exception:
+        pass
+
+
 def get_warning_key(file_path: str, content_hash: str) -> str:
     """Generate a unique key for deduplication."""
     # MD5 used for cache key only, not security (nosec B324)
@@ -134,6 +193,27 @@ def load_dedup_config() -> bool:
     except Exception:
         pass
     return True
+
+
+def load_terminal_explanations_mode() -> str:
+    """Load GUI terminal surfacing mode from config.
+
+    Modes:
+      - full: show full explanation in terminal (v1 behavior)
+      - minimal: show a short pointer in terminal, details in the Deliberate pane
+      - gui: suppress terminal output, details in the Deliberate pane
+    """
+    try:
+        config_path = Path(CONFIG_FILE)
+        if config_path.exists():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+                mode = (config.get("gui", {}) or {}).get("terminalExplanations", "full")
+                if mode in ("full", "minimal", "gui"):
+                    return mode
+    except Exception:
+        pass
+    return "full"
 
 
 def extract_content(tool_name: str, tool_input: dict) -> tuple:
@@ -220,6 +300,35 @@ def load_llm_config():
 def debug(msg):
     if DEBUG:
         print(f"[deliberate-changes] {msg}", file=sys.stderr)
+
+
+def broadcast_event(session_id: str, data: dict):
+    """Fire-and-forget broadcast for v2 GUI consumers."""
+    try:
+        payload = {
+            "type": "file_change_analyzed",
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "sessionId": session_id,
+            "data": data
+        }
+
+        logged = append_event_log(payload)
+        cleanup_old_event_logs()
+
+        headers = {"Content-Type": "application/json"}
+        if logged:
+            headers["X-Deliberate-Event-Logged"] = "1"
+
+        req = urllib.request.Request(
+            BROADCAST_URL,
+            data=json.dumps(payload).encode('utf-8'),
+            headers=headers,
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=0.5):  # nosec B310
+            pass
+    except Exception:
+        pass
 
 
 def call_classifier(operation: str, file_path: str, content: str = None, old_string: str = None, new_string: str = None) -> dict | None:
@@ -566,7 +675,13 @@ def main():
 
     # User-facing message with branded formatting and colors
     # Make the explanation text visible with the risk color so it's not skipped
-    user_message = f"{emoji} {BOLD}{CYAN}DELIBERATE{RESET} {BOLD}{color}[{risk}]{RESET} {op_label}\n    File: {rel_path}\n    {color}{explanation}{RESET}{llm_unavailable_warning}"
+    surfacing_mode = load_terminal_explanations_mode()
+    # Even in "gui" mode we keep a tiny pointer so the user is never fully blind
+    # if the GUI/server is down.
+    if surfacing_mode in ("minimal", "gui"):
+        user_message = f"{emoji} {BOLD}{CYAN}DELIBERATE{RESET} {BOLD}{color}[{risk}]{RESET} {op_label}\n    File: {rel_path}\n    {color}Details in Deliberate pane{RESET}"
+    else:
+        user_message = f"{emoji} {BOLD}{CYAN}DELIBERATE{RESET} {BOLD}{color}[{risk}]{RESET} {op_label}\n    File: {rel_path}\n    {color}{explanation}{RESET}{llm_unavailable_warning}"
 
     # Context for Claude
     context = f"**Deliberate {op_label}** [{risk}] {rel_path}: {explanation}{llm_unavailable_warning}"
@@ -596,6 +711,15 @@ def main():
             "additionalContext": context
         }
     }
+
+    broadcast_event(session_id, {
+        "operation": op_label.lower(),
+        "filePath": file_path,
+        "relativePath": rel_path,
+        "risk": risk,
+        "explanation": explanation,
+        "permissionDecision": "allow"
+    })
 
     print(json.dumps(output))
 

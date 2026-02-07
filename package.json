@@ -27,12 +27,18 @@
     "start": "node src/server.js",
     "install-hooks": "node src/install.js",
     "preuninstall": "node src/uninstall.js",
-    "test": "node --test"
+    "test": "node --test --test-concurrency=1",
+    "gui:install": "npm --prefix gui install",
+    "gui:dev": "npm --prefix gui run tauri dev",
+    "gui:build": "npm --prefix gui run tauri build",
+    "gui:check": "npm --prefix gui run check"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.0.0",
+    "blessed": "^0.1.81",
     "commander": "^12.0.0",
-    "express": "^4.18.0"
+    "express": "^4.18.0",
+    "ws": "^8.18.0"
   },
   "engines": {
     "node": ">=18.0.0"

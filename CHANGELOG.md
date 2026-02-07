@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **v2 UI feed plumbing:** Hook events broadcast to the local server (`/api/broadcast`) and fan out over WebSocket (`/ws`).
+- **Persistent event log:** Hooks append a local JSONL log under `~/.deliberate/events/` so UIs have history even if started late.
+- **Deliberate TUI + pane:** `deliberate tui` and `deliberate pane` provide a terminal-native side panel for Claude Code/OpenCode.
+- **Embedded chat:** Streaming “discuss this command/change” chat (mock mode when no keys are configured).
+- **Optional desktop GUI:** `deliberate gui` launches the Tauri companion app (kept for future IDE harness work).
+
 ## [1.0.5] - 2026-01-21
 
 ### Added

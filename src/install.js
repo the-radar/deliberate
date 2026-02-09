@@ -84,7 +84,9 @@ const HOOKS = [
     source: 'deliberate-session-start.py',
     dest: 'deliberate-session-start.py',
     event: 'SessionStart',
-    matcher: '',
+    // Claude Code fires SessionStart for multiple lifecycle reasons
+    // (startup/resume/compact). We only want to auto-open panes on startup.
+    matcher: 'startup',
     timeout: 5
   }
 ];
@@ -499,11 +501,13 @@ function updateSettings() {
     const needle = String(hook.dest || hook.source || 'deliberate').replace(/\\/g, '/');
 
     // Check if our hook already exists
-    const existingIndex = settings.hooks[event].findIndex((h) => {
-      const matcher = normalizeMatcher(h.matcher);
-      if (matcher !== normalizeMatcher(hook.matcher)) return false;
-      return (h.hooks || []).some((hh) => String(hh.command || '').includes(needle));
-    });
+    // Prefer matching by the installed hook filename, not by matcher.
+    // Users often tweak matchers manually, and we also evolve them over time
+    // (ex: SessionStart should only run on "startup"). If we matched on matcher
+    // first, we'd accidentally install duplicates.
+    const existingIndex = settings.hooks[event].findIndex((h) =>
+      (h.hooks || []).some((hh) => String(hh.command || '').includes(needle))
+    );
 
     const hookPath = path.join(HOOKS_DIR, hook.dest);
     const hookConfig = {

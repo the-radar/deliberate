@@ -216,6 +216,22 @@ def load_terminal_explanations_mode() -> str:
     return "full"
 
 
+def deliberate_enabled() -> bool:
+    """Global Deliberate enable switch (default: enabled)."""
+    try:
+        config_path = Path(CONFIG_FILE)
+        if config_path.exists():
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f) or {}
+                deliberate = config.get("deliberate", {}) or {}
+                value = deliberate.get("enabled")
+                if isinstance(value, bool):
+                    return value
+    except Exception:
+        pass
+    return True
+
+
 def extract_content(tool_name: str, tool_input: dict) -> tuple:
     """Extract file_path and content from tool input, handling Write/Edit/MultiEdit."""
     file_path = tool_input.get("file_path", "")
@@ -553,6 +569,11 @@ def main():
 
     if not content and not new_string:
         debug("No content, skipping")
+        sys.exit(0)
+
+    # Master kill switch. When disabled, fail-open with no output.
+    if not deliberate_enabled():
+        debug("Deliberate disabled, skipping")
         sys.exit(0)
 
     # Generate content hash for caching and deduplication

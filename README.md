@@ -172,6 +172,10 @@ If you install Deliberate hooks, a Deliberate pane can auto-open at Claude Code 
 }
 ```
 
+### Disable / enable Deliberate (quick toggle)
+
+In the TUI, press `x` to toggle Deliberate on/off. When off, hooks fail-open and produce no output until you re-enable it.
+
 ## Deliberate GUI (Desktop, optional)
 
 The desktop GUI is a Tauri app that shows hook output in a floating window. It is kept for future IDE/Antigravity harnesses and is not the recommended UX for Claude Code/OpenCode.

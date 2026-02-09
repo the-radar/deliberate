@@ -35,6 +35,12 @@ function resolveConfigFile() {
 
 // Default configuration
 const DEFAULT_CONFIG = {
+  // Master enable switch for Deliberate hooks and UI.
+  // When disabled, hooks should fail-open and produce no output, making Deliberate
+  // effectively inert until re-enabled.
+  deliberate: {
+    enabled: true
+  },
   llm: {
     provider: null,  // 'claude-subscription', 'anthropic', 'ollama', or null
     apiKey: null,    // For 'anthropic' provider

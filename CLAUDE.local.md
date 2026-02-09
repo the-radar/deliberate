@@ -42,6 +42,7 @@ Pivot Deliberate v2 UX to a terminal-native TUI + split-pane workflow (WezTerm-f
   - `deliberate pane` split-pane launcher (WezTerm-first, tmux optional, fallback to current terminal)
   - Per-session pane defaulting: hooks now include `cwd` in events and the pane/TUI auto-picks the most recent session for the current working directory
   - Claude Code SessionStart hook (`hooks/deliberate-session-start.py`) can auto-open a per-session pane and auto-start the server
+  - Installer no longer hard-fails on missing `claude-agent-sdk` (optional, not required for core functionality)
 
 ### Now:
 - Manual verification in WezTerm against real Claude Code sessions (pane split, follow behavior, skip/block effects).

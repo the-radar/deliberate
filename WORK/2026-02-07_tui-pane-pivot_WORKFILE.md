@@ -30,6 +30,7 @@ Success looks like: I can run `deliberate pane`, keep coding in Claude Code, and
   - [x] `deliberate pane` opens a split pane (wezterm cli, tmux if present, fallback to current terminal)
 - [x] Update hook terminal pointer text from “GUI” to “TUI/pane” and write events to JSONL (without changing gating).
 - [x] Add Claude Code SessionStart hook to auto-open per-session pane and auto-start server (macOS new window fallback).
+- [x] Fix installer to avoid hard-failing on optional `claude-agent-sdk` package.
 - [x] Server polish (optional): append `/api/broadcast` events to JSONL only when hooks did not already log (header gate).
 - [x] Tests:
   - [x] Unit tests for event log writer/reader

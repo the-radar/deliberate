@@ -128,8 +128,29 @@ export async function openPane(options = {}) {
     }
   }
 
-  // Fallback: run in the current terminal. This blocks, but it still works.
-  // We keep the message short because this will show up in terminal output.
+  // macOS fallback: open a new WezTerm window when we can't split.
+  // This is intentionally macOS-specific because the user wants a native
+  // per-session "side panel" experience even outside split-capable terminals.
+  if (process.platform === 'darwin') {
+    const cwd = options.cwd || process.cwd();
+    const startArgs = ['start', '--cwd', cwd, '--', tui.cmd, ...tui.args];
+
+    try {
+      await run('wezterm', startArgs);
+      return;
+    } catch {
+      // Fall through to `open -na WezTerm` if wezterm isn't on PATH.
+    }
+
+    try {
+      await run('open', ['-na', 'WezTerm', '--args', ...startArgs]);
+      return;
+    } catch {
+      // Fall through to in-terminal mode.
+    }
+  }
+
+  // Final fallback: run in the current terminal. This blocks, but it still works.
   console.error('deliberate pane: no supported pane manager detected, running TUI in this terminal');
   await run(tui.cmd, tui.args, { cwd: options.cwd || process.cwd() });
 }

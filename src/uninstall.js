@@ -27,7 +27,8 @@ const GEMINI_HOOKS_DIR = path.join(GEMINI_DIR, 'hooks');
 const HOOKS_TO_REMOVE = [
   'deliberate-commands.py',
   'deliberate-commands-post.py',
-  'deliberate-changes.py'
+  'deliberate-changes.py',
+  'deliberate-session-start.py'
 ];
 
 /**
@@ -155,20 +156,26 @@ function removeFromSettings() {
     const content = fs.readFileSync(SETTINGS_FILE, 'utf-8');
     const settings = JSON.parse(content);
 
-    // Remove Deliberate hooks from PreToolUse and PostToolUse
+    // Remove Deliberate hooks from PreToolUse, PostToolUse, and SessionStart
     let modified = false;
 
     if (settings.hooks) {
+      const isDeliberateHookCommand = (command) => {
+        if (!command) return false;
+        return (
+          command.includes('deliberate-commands') ||
+          command.includes('deliberate-changes') ||
+          command.includes('deliberate-session-start')
+        );
+      };
+
       // Filter out Deliberate hooks from PreToolUse
       if (settings.hooks.PreToolUse) {
         const filtered = settings.hooks.PreToolUse.map(matcher => {
           if (!matcher.hooks) return matcher;
 
           const filteredHooks = matcher.hooks.filter(hook => {
-            const isDeliberate = hook.command && (
-              hook.command.includes('deliberate-commands') ||
-              hook.command.includes('deliberate-changes')
-            );
+            const isDeliberate = isDeliberateHookCommand(hook.command);
             if (isDeliberate) modified = true;
             return !isDeliberate;
           });
@@ -185,10 +192,7 @@ function removeFromSettings() {
           if (!matcher.hooks) return matcher;
 
           const filteredHooks = matcher.hooks.filter(hook => {
-            const isDeliberate = hook.command && (
-              hook.command.includes('deliberate-commands') ||
-              hook.command.includes('deliberate-changes')
-            );
+            const isDeliberate = isDeliberateHookCommand(hook.command);
             if (isDeliberate) modified = true;
             return !isDeliberate;
           });
@@ -197,6 +201,23 @@ function removeFromSettings() {
         }).filter(matcher => matcher.hooks && matcher.hooks.length > 0);
 
         settings.hooks.PostToolUse = filtered;
+      }
+
+      // Filter out Deliberate hooks from SessionStart
+      if (settings.hooks.SessionStart) {
+        const filtered = settings.hooks.SessionStart.map(matcher => {
+          if (!matcher.hooks) return matcher;
+
+          const filteredHooks = matcher.hooks.filter(hook => {
+            const isDeliberate = isDeliberateHookCommand(hook.command);
+            if (isDeliberate) modified = true;
+            return !isDeliberate;
+          });
+
+          return { ...matcher, hooks: filteredHooks };
+        }).filter(matcher => matcher.hooks && matcher.hooks.length > 0);
+
+        settings.hooks.SessionStart = filtered;
       }
     }
 

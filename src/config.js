@@ -77,6 +77,16 @@ const DEFAULT_CONFIG = {
     // - "minimal": show a short pointer in terminal, full details in the Deliberate pane/TUI
     // - "gui": suppress terminal explanations entirely (pane/TUI only)
     terminalExplanations: 'full'
+  },
+
+  // Terminal UI behavior.
+  tui: {
+    // Auto-open a per-session pane on Claude Code SessionStart.
+    // This is the intended "native" workflow for Claude Code/OpenCode.
+    autoPane: true,
+
+    // Start the local Deliberate server if it is not running yet.
+    autoStartServer: true
   }
 };
 

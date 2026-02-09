@@ -73,6 +73,15 @@ const HOOKS = [
     event: 'PostToolUse',
     matcher: 'Write|Edit|MultiEdit',
     timeout: 35
+  },
+
+  // SessionStart: auto-open per-session Deliberate pane (TUI) and auto-start server
+  {
+    source: 'deliberate-session-start.py',
+    dest: 'deliberate-session-start.py',
+    event: 'SessionStart',
+    matcher: '',
+    timeout: 5
   }
 ];
 
@@ -482,11 +491,15 @@ function updateSettings() {
       settings.hooks[event] = [];
     }
 
+    const normalizeMatcher = (value) => (typeof value === 'string' ? value : '');
+    const needle = String(hook.dest || hook.source || 'deliberate').replace(/\\/g, '/');
+
     // Check if our hook already exists
-    const existingIndex = settings.hooks[event].findIndex(h =>
-      h.matcher === hook.matcher &&
-      h.hooks?.some(hh => hh.command?.includes('deliberate'))
-    );
+    const existingIndex = settings.hooks[event].findIndex((h) => {
+      const matcher = normalizeMatcher(h.matcher);
+      if (matcher !== normalizeMatcher(hook.matcher)) return false;
+      return (h.hooks || []).some((hh) => String(hh.command || '').includes(needle));
+    });
 
     const hookPath = path.join(HOOKS_DIR, hook.dest);
     const hookConfig = {

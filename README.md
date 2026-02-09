@@ -162,6 +162,16 @@ To reduce terminal noise, set `gui.terminalExplanations` in `~/.deliberate/confi
 
 Embedded chat works in the TUI. If you do not have keys configured, chat replies in mock mode.
 
+### Auto-open pane on Claude Code SessionStart
+
+If you install Deliberate hooks, a Deliberate pane can auto-open at Claude Code session start (one pane per session) and auto-start the local server. This is controlled by:
+
+```json
+{
+  "tui": { "autoPane": true, "autoStartServer": true }
+}
+```
+
 ## Deliberate GUI (Desktop, optional)
 
 The desktop GUI is a Tauri app that shows hook output in a floating window. It is kept for future IDE/Antigravity harnesses and is not the recommended UX for Claude Code/OpenCode.

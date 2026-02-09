@@ -158,6 +158,7 @@ program
         const hooks = settings.hooks || {};
         const preToolUse = hooks.PreToolUse || [];
         const postToolUse = hooks.PostToolUse || [];
+        const sessionStart = hooks.SessionStart || [];
 
         const hasHookCommand = (entries, needle) =>
           entries.some(entry => Array.isArray(entry.hooks) && entry.hooks.some(hook =>
@@ -167,6 +168,7 @@ program
         const hasCommandHook = hasHookCommand(preToolUse, 'deliberate-commands');
         const hasChangesHook = hasHookCommand(postToolUse, 'deliberate-changes');
         const hasCommandPostHook = hasHookCommand(postToolUse, 'deliberate-commands-post');
+        const hasSessionStartHook = hasHookCommand(sessionStart, 'deliberate-session-start');
 
         if (hasCommandHook && hasChangesHook && hasCommandPostHook) {
           console.log('Hooks:      ✅ Installed (PreToolUse + PostToolUse)');
@@ -176,6 +178,12 @@ program
           hooksInstalled = true;
         } else {
           console.log('Hooks:      ❌ Not installed');
+        }
+
+        if (hasSessionStartHook) {
+          console.log('Auto pane:  ✅ SessionStart hook installed');
+        } else {
+          console.log('Auto pane:  ⚠️  SessionStart hook not installed');
         }
       } catch (e) {
         console.log('Hooks:      ❌ Error reading settings');

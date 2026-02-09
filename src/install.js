@@ -40,7 +40,11 @@ const PYTHON_CMD = IS_WINDOWS ? 'python' : 'python3';
 const PIP_CMD = IS_WINDOWS ? 'pip' : 'pip3';
 
 // Required Python packages
-const PYTHON_DEPS = ['sentence-transformers', 'scikit-learn', 'numpy', 'claude-agent-sdk'];
+// NOTE: `claude-agent-sdk` is intentionally not required here.
+// The hooks can optionally use it for subscription-based LLM calls, but it is
+// not reliably available via PyPI in all environments. Deliberate should still
+// install and function without it.
+const PYTHON_DEPS = ['sentence-transformers', 'scikit-learn', 'numpy'];
 
 const OPENCODE_CONFIG_FILES = ['opencode.json', 'opencode.jsonc'];
 

@@ -72,6 +72,18 @@ def _enabled(config: dict, key: str, default: bool) -> bool:
     return default
 
 
+def _deliberate_enabled(config: dict) -> bool:
+    """Global Deliberate enable switch (default: enabled)."""
+    try:
+        deliberate = config.get("deliberate", {}) or {}
+        value = deliberate.get("enabled")
+        if isinstance(value, bool):
+            return value
+    except Exception:
+        pass
+    return True
+
+
 def _healthcheck(port: int) -> bool:
     try:
         url = f"http://localhost:{port}/health"
@@ -149,10 +161,25 @@ def main() -> int:
     except Exception:
         return 0
 
+    # Claude Code fires SessionStart for multiple reasons (startup/resume/compact).
+    # We only want to auto-open panes on initial startup, to avoid spawning extra
+    # panes during compaction cycles.
+    source = (
+        input_data.get("source")
+        or input_data.get("reason")
+        or input_data.get("event_source")
+        or ""
+    )
+    if str(source).lower() not in ("", "startup"):
+        return 0
+
     session_id = input_data.get("session_id") or "default"
     cwd = input_data.get("cwd") or os.getcwd()
 
     config = _load_config()
+
+    if not _deliberate_enabled(config):
+        return 0
 
     auto_pane = _enabled(config, "autoPane", True)
     auto_start_server = _enabled(config, "autoStartServer", True)

@@ -15,7 +15,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { loadConfig, addSkipCommand, addCustomBlock } from '../config.js';
+import { loadConfig, patchConfig, addSkipCommand, addCustomBlock } from '../config.js';
 import { readRecentEvents, tailEventLog } from '../event-log.js';
 import { streamChat } from '../chat-client.js';
 
@@ -223,9 +223,11 @@ export async function runTui(options = {}) {
     return;
   }
 
-  const config = loadConfig();
+  let config = loadConfig();
   const serverBaseUrl = config.gui?.serverBaseUrl || 'http://localhost:8765';
   const serverPort = config.classifier?.serverPort || 8765;
+  const enabledFromConfig = config.deliberate?.enabled;
+  const deliberateOn = enabledFromConfig === false ? false : true;
 
   const anchorCwd = options.cwd || process.cwd();
 
@@ -235,7 +237,8 @@ export async function runTui(options = {}) {
     sessionId: options.sessionId || null,
     events: readRecentEvents({ days: 2, maxEventsPerFile: 2000 }),
     serverOk: false,
-    statusMessage: ''
+    statusMessage: '',
+    deliberateOn
   };
 
   const sessions = buildSessions(state.events);
@@ -332,6 +335,7 @@ export async function runTui(options = {}) {
     's skip',
     'b block',
     'd discuss',
+    'x toggle',
     'S start server',
     'q quit'
   ].join(' | ');
@@ -348,8 +352,9 @@ export async function runTui(options = {}) {
     const counts = buildCounts(filtered);
     const serverDot = state.serverOk ? '●' : '○';
     const followLabel = state.follow ? 'follow' : 'paused';
+    const enabledLabel = state.deliberateOn ? 'on' : 'off';
 
-    const line1 = `Deliberate  session=${sessionLabel}  total=${counts.total}  safe=${counts.safe}  mod=${counts.moderate}  danger=${counts.dangerous}`;
+    const line1 = `Deliberate (${enabledLabel})  session=${sessionLabel}  total=${counts.total}  safe=${counts.safe}  mod=${counts.moderate}  danger=${counts.dangerous}`;
     const line2 = `server=${serverBaseUrl}  ${serverDot}  ${followLabel}`;
     const line3 = state.statusMessage ? state.statusMessage : '';
 
@@ -515,6 +520,19 @@ export async function runTui(options = {}) {
       setStatus('added to block list');
     } catch {
       setStatus('block failed');
+    }
+  });
+
+  screen.key(['x'], () => {
+    try {
+      const next = !state.deliberateOn;
+      config = patchConfig({ deliberate: { enabled: next } });
+      state.deliberateOn = next;
+      setStatus(next ? 'deliberate enabled' : 'deliberate disabled');
+      renderHeader();
+      screen.render();
+    } catch {
+      setStatus('toggle failed');
     }
   });
 

@@ -1035,13 +1035,28 @@ def save_to_cache(session_id: str, cmd_hash: str, data: dict):
 
 
 _config_cache = None
+_config_cache_mtime_ns = None
 
 
 def _load_config() -> dict:
-    """Load config from CONFIG_FILE with simple caching."""
-    global _config_cache
-    if _config_cache is not None:
-        return _config_cache
+    """Load config from CONFIG_FILE with simple caching.
+
+    We keep caching to make hooks fast, but we must also react quickly to user
+    toggles from the TUI (enable/disable, skip/block updates). So we invalidate
+    the cache when the config file mtime changes.
+    """
+    global _config_cache, _config_cache_mtime_ns
+    try:
+        config_path = Path(CONFIG_FILE)
+        stat = config_path.stat() if config_path.exists() else None
+        mtime_ns = stat.st_mtime_ns if stat else None
+        if _config_cache is not None and _config_cache_mtime_ns == mtime_ns:
+            return _config_cache
+        _config_cache_mtime_ns = mtime_ns
+    except Exception:
+        # If stat fails, fall back to previous cache.
+        if _config_cache is not None:
+            return _config_cache
     try:
         config_path = Path(CONFIG_FILE)
         if config_path.exists():
@@ -1052,6 +1067,18 @@ def _load_config() -> dict:
         pass
     _config_cache = {}
     return _config_cache
+
+
+def deliberate_enabled() -> bool:
+    """Global Deliberate enable switch (default: enabled)."""
+    try:
+        deliberate = _load_config().get("deliberate", {})
+        value = (deliberate or {}).get("enabled")
+        if isinstance(value, bool):
+            return value
+    except Exception:
+        pass
+    return True
 
 
 def load_blocking_config() -> dict:
@@ -1748,6 +1775,11 @@ def main():
     command = tool_input.get("command", "")
     if not command:
         debug("No command, skipping")
+        sys.exit(0)
+
+    # Master kill switch. When disabled, fail-open with no output.
+    if not deliberate_enabled():
+        debug("Deliberate disabled, skipping")
         sys.exit(0)
 
     # Check if command should be skipped (trivial, always-safe commands)

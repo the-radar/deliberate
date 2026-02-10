@@ -113,6 +113,10 @@ export async function openPane(options = {}) {
     const args = [
       'split-window',
       '-h',
+      // Don't steal focus. This is critical for Claude Code UX, otherwise the
+      // newly-created Deliberate pane becomes active and it feels like it
+      // "captures" all keyboard input.
+      '-d',
       direction === 'left' ? '-b' : '',
       '-p',
       String(percent),

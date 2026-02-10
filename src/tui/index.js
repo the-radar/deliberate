@@ -46,6 +46,17 @@ function pickSessionForCwd(events, cwd) {
   return null;
 }
 
+function cwdMatches(anchor, candidate) {
+  const a = typeof anchor === 'string' && anchor.trim() ? anchor : null;
+  const c = typeof candidate === 'string' && candidate.trim() ? candidate : null;
+  if (!a || !c) return false;
+
+  const aWithSep = a.endsWith(path.sep) ? a : `${a}${path.sep}`;
+  const cWithSep = c.endsWith(path.sep) ? c : `${c}${path.sep}`;
+
+  return c === a || a.startsWith(cWithSep) || c.startsWith(aWithSep);
+}
+
 function truncate(value, max) {
   const str = String(value ?? '');
   if (str.length <= max) return str;
@@ -705,6 +716,27 @@ export async function runTui(options = {}) {
 
       const matches = state.allSessions || !state.sessionId || String(ev.sessionId || '') === String(state.sessionId);
       if (!matches) {
+        // Session mismatch happens in practice. We see SessionStart session ids
+        // that don't match the subsequent tool hook session ids. When that
+        // happens, the pane looks "dead" even though events are flowing.
+        //
+        // To keep the UX sane, if we're filtered to a session with zero events,
+        // and we receive a new event for the current working directory, we
+        // auto-switch to that session.
+        if (!state.allSessions && filtered.length === 0) {
+          const evCwd = typeof ev?.data?.cwd === 'string' ? ev.data.cwd : null;
+          if (cwdMatches(anchorCwd, evCwd)) {
+            const sid = typeof ev.sessionId === 'string' ? ev.sessionId : null;
+            if (sid) {
+              state.sessionId = sid;
+              selectedIndex = 0;
+              setStatus(`auto-switched session to ${truncate(sid, 24)}`, { ttlMs: 2000 });
+              renderAll({ keepSelection: false });
+              return;
+            }
+          }
+        }
+
         // Still update header counts by re-filtering occasionally.
         renderHeader();
         screen.render();

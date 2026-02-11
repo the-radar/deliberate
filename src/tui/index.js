@@ -133,6 +133,12 @@ function detailsForEvent(event) {
     lines.push(data.explanation.trim());
   }
 
+  if (Array.isArray(data.evidence) && data.evidence.length) {
+    lines.push('');
+    lines.push('evidence:');
+    lines.push(prettyJson(data.evidence));
+  }
+
   if (data.consequences) {
     lines.push('');
     lines.push('consequences:');

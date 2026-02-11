@@ -20,10 +20,13 @@ import re
 import subprocess
 import sys
 import tempfile
+import shlex
+import urllib.parse
 import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import List, Dict, Any, Optional
 
 # Configuration
 CLASSIFIER_URL = "http://localhost:8765/classify/command"
@@ -1111,6 +1114,268 @@ def load_terminal_explanations_mode() -> str:
         pass
     return "full"
 
+def load_web_search_config() -> dict:
+    """Load scoped web search configuration from config (default enabled).
+
+    This is intentionally not arbitrary browsing. It only hits known structured
+    sources (npm, PyPI, GitHub, GitLab) and returns evidence that Deliberate can
+    show to the user during approvals.
+    """
+    try:
+        deliberate = _load_config().get("deliberate", {}) or {}
+        ws = deliberate.get("webSearch", {}) or {}
+
+        enabled = ws.get("enabled", True)
+        sources = ws.get("sources", ["npm", "pypi", "github", "gitlab"])
+        max_results = ws.get("maxResultsPerSource", 3)
+
+        if not isinstance(sources, list):
+            sources = ["npm", "pypi", "github", "gitlab"]
+
+        try:
+            max_results = int(max_results)
+        except Exception:
+            max_results = 3
+
+        max_results = max(1, min(max_results, 5))
+
+        return {
+            "enabled": bool(enabled),
+            "sources": [str(s).lower() for s in sources if isinstance(s, (str, int))],
+            "maxResultsPerSource": max_results,
+        }
+    except Exception:
+        return {"enabled": True, "sources": ["npm", "pypi", "github", "gitlab"], "maxResultsPerSource": 3}
+
+
+def _http_get_json(url: str, timeout_s: float = 0.8, max_bytes: int = 250_000) -> Optional[dict]:
+    """Fetch JSON with hard limits. Fail-open and never raise to callers."""
+    try:
+        req = urllib.request.Request(
+            url,
+            method="GET",
+            headers={
+                "User-Agent": "deliberate/1.0 (+https://github.com/the-radar/deliberate)",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # nosec B310
+            data = resp.read(max_bytes + 1)
+            if len(data) > max_bytes:
+                return None
+            try:
+                return json.loads(data.decode("utf-8", errors="replace"))
+            except Exception:
+                return None
+    except Exception:
+        return None
+
+
+def _extract_candidate_names(command: str) -> List[str]:
+    """Best-effort extract likely package/binary names from a shell command."""
+    try:
+        tokens = shlex.split(command)
+    except Exception:
+        tokens = str(command).split()
+
+    if not tokens:
+        return []
+
+    candidates: List[str] = []
+
+    def push(name: str):
+        n = str(name or "").strip()
+        if not n:
+            return
+        if n.startswith("-") or n.startswith("./") or "/" in n:
+            return
+        candidates.append(n)
+
+    head = tokens[0]
+    if head in ("npx", "pnpm", "yarn", "bunx", "npm"):
+        if head == "pnpm" and len(tokens) >= 3 and tokens[1] == "dlx":
+            push(tokens[2])
+        elif head == "yarn" and len(tokens) >= 3 and tokens[1] == "dlx":
+            push(tokens[2])
+        elif head == "npm" and len(tokens) >= 3 and tokens[1] in ("exec", "x"):
+            push(tokens[2])
+        elif head == "npx" and len(tokens) >= 2:
+            push(tokens[1])
+        elif head == "bunx" and len(tokens) >= 2:
+            push(tokens[1])
+
+    # Also consider the command itself as a candidate binary.
+    push(head)
+
+    out: List[str] = []
+    seen = set()
+    for c in candidates:
+        if c in seen:
+            continue
+        seen.add(c)
+        out.append(c)
+    return out[:3]
+
+
+def _local_node_bin_evidence(name: str, cwd: str) -> Optional[dict]:
+    """Try to map a binary name to a local npm package via node_modules/.bin."""
+    try:
+        if not cwd or not name:
+            return None
+        bin_path = Path(cwd) / "node_modules" / ".bin" / name
+        if not bin_path.exists():
+            return None
+
+        resolved = bin_path.resolve()
+        parts = list(resolved.parts)
+        if "node_modules" not in parts:
+            return None
+        idx = parts.index("node_modules")
+        if idx + 1 >= len(parts):
+            return None
+
+        pkg_dir = Path(*parts[: idx + 2])
+        pkg_json = pkg_dir / "package.json"
+        if not pkg_json.exists():
+            return None
+
+        with open(pkg_json, "r", encoding="utf-8") as f:
+            pkg = json.load(f) or {}
+
+        pkg_name = pkg.get("name") or str(pkg_dir.name)
+        repo = pkg.get("repository") or {}
+        if isinstance(repo, str):
+            repo_url = repo
+        elif isinstance(repo, dict):
+            repo_url = repo.get("url")
+        else:
+            repo_url = None
+
+        return {
+            "source": "local",
+            "type": "npm",
+            "name": str(pkg_name),
+            "version": pkg.get("version"),
+            "description": pkg.get("description"),
+            "url": pkg.get("homepage") or repo_url,
+            "confidence": "high",
+        }
+    except Exception:
+        return None
+
+
+def web_search_evidence(command: str, cwd: str) -> List[dict]:
+    """Scoped web search that returns evidence objects (fail-open)."""
+    ws = load_web_search_config()
+    if not ws.get("enabled", True):
+        return []
+
+    sources = set(ws.get("sources") or [])
+    max_results = ws.get("maxResultsPerSource", 3)
+
+    evidence: List[dict] = []
+
+    for name in _extract_candidate_names(command):
+        local = _local_node_bin_evidence(name, cwd)
+        if local:
+            evidence.append(local)
+
+        enc = urllib.parse.quote(name, safe="@/._-")
+
+        if "npm" in sources:
+            data = _http_get_json(f"https://registry.npmjs.org/{enc}")
+            if data and isinstance(data, dict) and data.get("name"):
+                dist = data.get("dist-tags", {}) or {}
+                latest = dist.get("latest")
+                repo = (data.get("repository") or {}) if isinstance(data.get("repository"), dict) else {}
+                url = data.get("homepage") or repo.get("url")
+                evidence.append({
+                    "source": "npm",
+                    "name": data.get("name"),
+                    "version": latest,
+                    "description": data.get("description"),
+                    "url": url,
+                    "confidence": "medium",
+                })
+
+        if "pypi" in sources:
+            data = _http_get_json(f"https://pypi.org/pypi/{enc}/json")
+            info = (data or {}).get("info") if isinstance(data, dict) else None
+            if info and isinstance(info, dict) and info.get("name"):
+                evidence.append({
+                    "source": "pypi",
+                    "name": info.get("name"),
+                    "version": info.get("version"),
+                    "description": info.get("summary"),
+                    "url": info.get("home_page") or info.get("project_url"),
+                    "confidence": "medium",
+                })
+
+        if "github" in sources:
+            data = _http_get_json(f"https://api.github.com/search/repositories?q={enc}+in:name&per_page={max_results}")
+            items = (data or {}).get("items") if isinstance(data, dict) else None
+            if isinstance(items, list):
+                for item in items[:max_results]:
+                    if not isinstance(item, dict):
+                        continue
+                    evidence.append({
+                        "source": "github",
+                        "name": item.get("full_name") or item.get("name"),
+                        "description": item.get("description"),
+                        "url": item.get("html_url"),
+                        "stars": item.get("stargazers_count"),
+                        "confidence": "low",
+                    })
+
+        if "gitlab" in sources:
+            data = _http_get_json(f"https://gitlab.com/api/v4/projects?search={enc}&simple=true&per_page={max_results}")
+            if isinstance(data, list):
+                for item in data[:max_results]:
+                    if not isinstance(item, dict):
+                        continue
+                    evidence.append({
+                        "source": "gitlab",
+                        "name": item.get("path_with_namespace") or item.get("name"),
+                        "description": item.get("description"),
+                        "url": item.get("web_url"),
+                        "stars": item.get("star_count"),
+                        "confidence": "low",
+                    })
+
+    deduped: List[dict] = []
+    seen = set()
+    for ev in evidence:
+        key = (ev.get("source"), ev.get("name"), ev.get("url"))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(ev)
+
+    return deduped[:20]
+
+
+def format_evidence_summary(evidence: List[dict]) -> str:
+    """Compact evidence summary for terminal/context. Keep it short."""
+    if not evidence:
+        return ""
+    lines = []
+    for ev in evidence[:3]:
+        try:
+            src = str(ev.get("source") or "?")
+            name = str(ev.get("name") or "")
+            ver = ev.get("version")
+            url = ev.get("url")
+            if ver:
+                head = f"- {src}: {name}@{ver}"
+            else:
+                head = f"- {src}: {name}"
+            if url:
+                head += f" ({url})"
+            lines.append(head)
+        except Exception:
+            continue
+    return "\n".join(lines)
+
 
 # Default trivial commands that are TRULY safe - no abuse potential
 # These are skipped entirely (no analysis, no output) for performance
@@ -1583,7 +1848,12 @@ def extract_inline_content(command: str) -> str | None:
     return None
 
 
-def call_llm_for_explanation(command: str, pre_classification: dict | None = None, script_content: str | None = None) -> dict | None:
+def call_llm_for_explanation(
+    command: str,
+    pre_classification: dict | None = None,
+    script_content: str | None = None,
+    evidence: List[dict] | None = None,
+) -> dict | None:
     """Call the configured LLM to explain the command using Claude Agent SDK."""
     debug("call_llm_for_explanation started")
 
@@ -1630,7 +1900,23 @@ CRITICAL: Analyze the SCRIPT CONTENT above, not just the command. The script may
 - File system destruction
 - Backdoor installation"""
 
+    evidence_section = ""
+    if evidence:
+        # Keep evidence readable and bounded. It's used as citations for the
+        # explanation and for follow-up questions.
+        try:
+            evidence_json = json.dumps(evidence[:10], ensure_ascii=False, indent=2)[:8000]
+        except Exception:
+            evidence_json = "[]"
+        evidence_section = f"""
+
+EVIDENCE (scoped web search + local resolution):
+```json
+{evidence_json}
+```"""
+
     prompt = f"""Analyze this shell command for both purpose and security implications. Be concise (1-2 sentences).{danger_note}{context_note}{script_section}
+{evidence_section}
 
 Command: {command}
 
@@ -1641,7 +1927,7 @@ Consider:
 - Is this command obfuscated or trying to hide its intent?
 {f"- MOST IMPORTANTLY: Analyze the script content being executed!" if script_content else ""}
 
-IMPORTANT: If you encounter any command, flag, option, or behavior you're uncertain about, use the WebSearch tool to verify current documentation before making assumptions.
+If you're uncertain about what something does, say what you don't know and ask a focused follow-up question.
 
 Format your response as:
 RISK: [SAFE|MODERATE|DANGEROUS]
@@ -1667,7 +1953,7 @@ async def main():
         options=ClaudeAgentOptions(
             model={repr(llm_config["model"])},
             max_turns=1,
-            disallowed_tools=['Task', 'TaskOutput', 'Bash', 'Glob', 'Grep', 'ExitPlanMode', 'Read', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'TodoWrite', 'KillShell', 'AskUserQuestion', 'Skill', 'SlashCommand', 'EnterPlanMode']
+            disallowed_tools=['Task', 'TaskOutput', 'Bash', 'Glob', 'Grep', 'ExitPlanMode', 'Read', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'TodoWrite', 'KillShell', 'AskUserQuestion', 'Skill', 'SlashCommand', 'EnterPlanMode']
         )
     )
 
@@ -1795,6 +2081,11 @@ def main():
 
     surfacing_mode = load_terminal_explanations_mode()
 
+    # Scoped web search evidence (npm/PyPI/GitHub/GitLab + local resolution).
+    # This is used to make explanations more trustworthy and to drive follow-up
+    # questions for approvals.
+    evidence = web_search_evidence(command, cwd)
+
     # User custom blocklist, hard stop before any heavier analysis.
     block_match = custom_blocklist_match(command, load_custom_blocklist())
     if block_match:
@@ -1804,6 +2095,7 @@ def main():
             "cwd": cwd,
             "risk": "DANGEROUS",
             "explanation": explanation,
+            "evidence": evidence,
             "consequences": None,
             "workflowPatterns": [],
             "backupPath": None,
@@ -1877,7 +2169,7 @@ def main():
 
     # Layer 2: Get LLM explanation for detailed analysis
     debug(f"Analyzing command: {command[:80]}")
-    llm_result = call_llm_for_explanation(command, classifier_result, analyzed_content)
+    llm_result = call_llm_for_explanation(command, classifier_result, analyzed_content, evidence)
 
     # Progressive degradation: Use classifier if LLM unavailable
     llm_unavailable_warning = ""
@@ -1919,7 +2211,8 @@ def main():
         "risk": risk,
         "explanation": explanation,
         "command": command[:200],  # Truncate for cache
-        "llm_unavailable_warning": llm_unavailable_warning
+        "llm_unavailable_warning": llm_unavailable_warning,
+        "evidence": evidence
     })
 
     # Add command to session history for workflow tracking
@@ -1933,6 +2226,7 @@ def main():
             "cwd": cwd,
             "risk": risk,
             "explanation": explanation,
+            "evidence": evidence,
             "consequences": destruction_consequences,
             "workflowPatterns": workflow_patterns,
             "backupPath": None,
@@ -1977,6 +2271,7 @@ def main():
                 "cwd": cwd,
                 "risk": risk,
                 "explanation": explanation,
+                "evidence": evidence,
                 "consequences": destruction_consequences,
                 "workflowPatterns": workflow_patterns,
                 "backupPath": backup_path,
@@ -2018,6 +2313,9 @@ def main():
     else:
         # Full terminal explanation (v1 behavior).
         reason = f"{emoji} {BOLD}{CYAN}DELIBERATE{RESET} {BOLD}{color}[{risk}]{RESET}\n    {color}{explanation}{RESET}{llm_unavailable_warning}"
+        ev_summary = format_evidence_summary(evidence)
+        if ev_summary:
+            reason += f"\n\n{CYAN}Evidence:{RESET}\n{ev_summary}"
 
     # Add workflow/destruction/backup context only in full terminal mode.
     backup_notice = ""
@@ -2036,6 +2334,9 @@ def main():
 
     # For Claude's context (shown in conversation)
     context = f"**Deliberate** [{risk}]: {explanation}{llm_unavailable_warning}"
+    ev_summary = format_evidence_summary(evidence)
+    if ev_summary:
+        context += f"\n\nEvidence:\n{ev_summary}"
     if workflow_warning:
         # Strip ANSI codes for Claude's context
         context += workflow_warning
@@ -2073,6 +2374,7 @@ def main():
         "cwd": cwd,
         "risk": risk,
         "explanation": explanation,
+        "evidence": evidence,
         "consequences": destruction_consequences,
         "workflowPatterns": workflow_patterns,
         "backupPath": backup_path,

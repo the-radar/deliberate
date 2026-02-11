@@ -200,6 +200,7 @@ def main():
     explanation = cached.get("explanation", "Command executed")
     llm_unavailable_warning = cached.get("llm_unavailable_warning", "")
     evidence = cached.get("evidence", [])
+    analysis_id = cached.get("analysisId")
     surfacing_mode = load_terminal_explanations_mode()
 
     # ANSI color codes for terminal output
@@ -248,6 +249,7 @@ def main():
     }
 
     broadcast_event(session_id, {
+        "analysisId": analysis_id,
         "command": command,
         "cwd": cwd,
         "risk": risk,

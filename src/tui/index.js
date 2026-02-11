@@ -82,6 +82,11 @@ function riskOf(event) {
 
 function titleOf(event) {
   const type = String(event?.type || '');
+  if (type === 'command_analysis_progress') {
+    const msg = typeof event?.data?.message === 'string' ? event.data.message : 'Analyzing…';
+    const cmd = typeof event?.data?.command === 'string' ? event.data.command : '';
+    return cmd ? `${msg}: ${cmd}` : msg;
+  }
   if (type === 'file_change_analyzed') {
     return event?.data?.relativePath || event?.data?.filePath || '(file change)';
   }
@@ -114,6 +119,11 @@ function detailsForEvent(event) {
   lines.push(`risk: ${riskOf(event)}`);
 
   const data = event.data || {};
+  if (event.type === 'command_analysis_progress') {
+    lines.push('');
+    lines.push(`stage: ${String(data.stage || '')}`);
+    lines.push(`message: ${String(data.message || '')}`);
+  }
 
   if (typeof data.command === 'string') {
     lines.push('');
@@ -176,12 +186,46 @@ function buildSessions(events) {
 function buildCounts(events) {
   const out = { total: events.length, safe: 0, moderate: 0, dangerous: 0 };
   for (const ev of events) {
+    if (ev?.type === 'command_analysis_progress') continue;
     const risk = riskOf(ev);
     if (risk === 'SAFE') out.safe += 1;
     else if (risk === 'DANGEROUS') out.dangerous += 1;
     else out.moderate += 1;
   }
   return out;
+}
+
+function coalesceTimelineEvents(events) {
+  const out = [];
+  const progressByAnalysis = new Map(); // analysisId -> index in out
+
+  for (const ev of events) {
+    const type = String(ev?.type || '');
+    const analysisId = typeof ev?.data?.analysisId === 'string' ? ev.data.analysisId : null;
+
+    if (type === 'command_analysis_progress') {
+      const pid = analysisId || null;
+      if (pid && progressByAnalysis.has(pid)) {
+        const idx = progressByAnalysis.get(pid);
+        if (typeof idx === 'number' && out[idx]) out[idx] = ev;
+      } else {
+        out.push(ev);
+        if (pid) progressByAnalysis.set(pid, out.length - 1);
+      }
+      continue;
+    }
+
+    // Final command result resolves a progress row.
+    if (analysisId && progressByAnalysis.has(analysisId)) {
+      const idx = progressByAnalysis.get(analysisId);
+      if (typeof idx === 'number' && out[idx]) out[idx] = null;
+      progressByAnalysis.delete(analysisId);
+    }
+
+    out.push(ev);
+  }
+
+  return out.filter(Boolean);
 }
 
 async function checkServerHealth(baseUrl) {
@@ -252,7 +296,7 @@ export async function runTui(options = {}) {
     follow: options.follow ?? true,
     allSessions: options.allSessions ?? false,
     sessionId: options.sessionId || null,
-    events: readRecentEvents({ days: 2, maxEventsPerFile: 2000 }),
+    events: coalesceTimelineEvents(readRecentEvents({ days: 2, maxEventsPerFile: 2000 })),
     serverOk: false,
     statusMessage: '',
     deliberateOn
@@ -490,7 +534,7 @@ export async function runTui(options = {}) {
   });
 
   screen.key(['r'], () => {
-    state.events = readRecentEvents({ days: 2, maxEventsPerFile: 2000 });
+    state.events = coalesceTimelineEvents(readRecentEvents({ days: 2, maxEventsPerFile: 2000 }));
     selectedIndex = 0;
     renderAll({ keepSelection: false });
     setStatus('reloaded');
@@ -715,7 +759,7 @@ export async function runTui(options = {}) {
     onEvent: (ev) => {
       if (!ev || typeof ev !== 'object') return;
 
-      state.events.push(ev);
+      state.events = coalesceTimelineEvents([...state.events, ev]);
       if (state.events.length > 10_000) {
         state.events = state.events.slice(state.events.length - 10_000);
       }

@@ -20,6 +20,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import shlex
 import urllib.parse
 import urllib.error
@@ -197,6 +198,20 @@ def broadcast_event(event_type: str, session_id: str, data: dict):
             pass
     except Exception:
         # Broadcast is additive only, never interfere with hook decisions.
+        pass
+
+
+def broadcast_progress(session_id: str, analysis_id: str, command: str, cwd: str, stage: str, message: str):
+    """Broadcast incremental analysis progress for one command review."""
+    try:
+        broadcast_event("command_analysis_progress", session_id, {
+            "analysisId": analysis_id,
+            "command": command,
+            "cwd": cwd,
+            "stage": stage,
+            "message": message
+        })
+    except Exception:
         pass
 
 
@@ -2063,6 +2078,10 @@ def main():
         debug("No command, skipping")
         sys.exit(0)
 
+    # Stable id for this specific command analysis run.
+    analysis_seed = f"{session_id}|{command}|{time.time_ns()}"
+    analysis_id = hashlib.md5(analysis_seed.encode(), usedforsecurity=False).hexdigest()[:16]
+
     # Master kill switch. When disabled, fail-open with no output.
     if not deliberate_enabled():
         debug("Deliberate disabled, skipping")
@@ -2078,19 +2097,26 @@ def main():
     # both for consequence analysis and as an anchor so the TUI can auto-select
     # the correct session for the current project.
     cwd = input_data.get("cwd", os.getcwd())
+    broadcast_progress(session_id, analysis_id, command, cwd, "start", "Starting command analysis")
 
     surfacing_mode = load_terminal_explanations_mode()
 
     # Scoped web search evidence (npm/PyPI/GitHub/GitLab + local resolution).
     # This is used to make explanations more trustworthy and to drive follow-up
     # questions for approvals.
+    broadcast_progress(session_id, analysis_id, command, cwd, "web_search", "Checking npm/PyPI/GitHub/GitLab evidence")
     evidence = web_search_evidence(command, cwd)
+    if evidence:
+        broadcast_progress(session_id, analysis_id, command, cwd, "web_search_done", f"Found {len(evidence)} evidence item(s)")
+    else:
+        broadcast_progress(session_id, analysis_id, command, cwd, "web_search_done", "No evidence found")
 
     # User custom blocklist, hard stop before any heavier analysis.
     block_match = custom_blocklist_match(command, load_custom_blocklist())
     if block_match:
         explanation = f"Command matched your custom blocklist entry: {block_match}"
         broadcast_event("command_analyzed", session_id, {
+            "analysisId": analysis_id,
             "command": command,
             "cwd": cwd,
             "risk": "DANGEROUS",
@@ -2169,6 +2195,7 @@ def main():
 
     # Layer 2: Get LLM explanation for detailed analysis
     debug(f"Analyzing command: {command[:80]}")
+    broadcast_progress(session_id, analysis_id, command, cwd, "llm", "Drafting explanation")
     llm_result = call_llm_for_explanation(command, classifier_result, analyzed_content, evidence)
 
     # Progressive degradation: Use classifier if LLM unavailable
@@ -2208,6 +2235,7 @@ def main():
     # MD5 used for cache key only, not security
     cmd_hash = hashlib.md5(command.encode(), usedforsecurity=False).hexdigest()[:16]
     save_to_cache(session_id, cmd_hash, {
+        "analysisId": analysis_id,
         "risk": risk,
         "explanation": explanation,
         "command": command[:200],  # Truncate for cache
@@ -2222,6 +2250,7 @@ def main():
     # UNLESS a workflow pattern was detected - then we still need to warn
     if risk == "SAFE" and not workflow_patterns:
         broadcast_event("command_analyzed", session_id, {
+            "analysisId": analysis_id,
             "command": command,
             "cwd": cwd,
             "risk": risk,
@@ -2267,6 +2296,7 @@ def main():
 
         if both_agree or script_analyzed:
             broadcast_event("command_analyzed", session_id, {
+                "analysisId": analysis_id,
                 "command": command,
                 "cwd": cwd,
                 "risk": risk,
@@ -2360,6 +2390,8 @@ def main():
         shown_warnings.add(warning_key)
         save_state(session_id, shown_warnings)
 
+    broadcast_progress(session_id, analysis_id, command, cwd, "decision", f"Ready for approval ({risk})")
+
     output = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -2370,6 +2402,7 @@ def main():
     }
 
     broadcast_event("command_analyzed", session_id, {
+        "analysisId": analysis_id,
         "command": command,
         "cwd": cwd,
         "risk": risk,

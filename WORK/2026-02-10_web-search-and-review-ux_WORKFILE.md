@@ -20,13 +20,16 @@ Success looks like: when Deliberate doesn’t recognize a command or package (ex
 ## Implementation plan (checklist)
 - [ ] Add config toggle for web lookup (default enabled): `deliberate.webSearch.enabled`.
 - [ ] Implement best-effort “web search” in the Bash PreToolUse hook:
-  - [ ] Detect likely package/binary names from the command (`npx`, `pnpm dlx`, bare binary).
-  - [ ] Query npm registry: `https://registry.npmjs.org/<name>` (timeout, cap response).
-  - [ ] Query PyPI: `https://pypi.org/pypi/<name>/json` (timeout).
-  - [ ] Query GitHub repo search: `https://api.github.com/search/repositories?q=<name>&per_page=3` (timeout).
-  - [ ] Convert results into a compact evidence block with URLs.
+  - [x] Detect likely package/binary names from the command (`npx`, `pnpm dlx`, bare binary).
+  - [x] Query npm registry: `https://registry.npmjs.org/<name>` (timeout, cap response).
+  - [x] Query PyPI: `https://pypi.org/pypi/<name>/json` (timeout).
+  - [x] Query GitHub repo search: `https://api.github.com/search/repositories?q=<name>&per_page=3` (timeout).
+  - [x] Query GitLab project search: `https://gitlab.com/api/v4/projects?search=<name>` (timeout).
+  - [x] Convert results into a compact evidence block with URLs.
   - [ ] Cache per-session per-name lookups to avoid repeated network calls.
 - [ ] Feed evidence into the LLM explanation prompt and include citations/URLs in user-facing explanation (pane/TUI).
+- [x] Feed evidence into the LLM explanation prompt and include citations/URLs in user-facing explanation (pane/TUI).
+- [x] Add incremental analysis progress events and coalesced in-place updates in TUI.
 - [ ] Add “review-first” UX scaffolding:
   - [ ] Add/confirm “pending approvals” view to the TUI (separate from history).
   - [ ] Add a place to show evidence and the approval interview transcript.
@@ -55,4 +58,3 @@ Success looks like: when Deliberate doesn’t recognize a command or package (ex
 
 ## Progress tracking
 - Now: implement scoped web lookup + wire into explanation prompt, then iterate on UX.
-

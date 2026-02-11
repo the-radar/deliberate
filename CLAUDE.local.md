@@ -43,12 +43,15 @@ Pivot Deliberate v2 UX to a terminal-native TUI + split-pane workflow (WezTerm-f
   - Per-session pane defaulting: hooks now include `cwd` in events and the pane/TUI auto-picks the most recent session for the current working directory
   - Claude Code SessionStart hook (`hooks/deliberate-session-start.py`) can auto-open a per-session pane and auto-start the server
   - Installer no longer hard-fails on missing `claude-agent-sdk` (optional, not required for core functionality)
+  - Scoped web search evidence for unknown commands/packages (npm, PyPI, GitHub, GitLab), shown in pane/TUI and included in hook context
 
 ### Now:
 - Manual verification in WezTerm against real Claude Code sessions (pane split, follow behavior, skip/block effects).
+- Implementing scoped web lookup evidence for unknown commands/packages (npm/PyPI/GitHub search) and a review-first UX for nervous users.
 
 ### Next:
 - Decide release packaging for GUI vs TUI (binary distribution and how users should choose UI mode by environment).
+- Build review-first TUI flow (pending approvals + evidence + interview transcript) and policy “always allow” experience.
 
 ## Open Questions:
 - None for core v2 implementation. Remaining work is polish and release flow decisions (GUI binary distribution, signing).

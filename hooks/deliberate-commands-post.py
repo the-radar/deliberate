@@ -199,6 +199,7 @@ def main():
     risk = cached.get("risk", "MODERATE")
     explanation = cached.get("explanation", "Command executed")
     llm_unavailable_warning = cached.get("llm_unavailable_warning", "")
+    evidence = cached.get("evidence", [])
     surfacing_mode = load_terminal_explanations_mode()
 
     # ANSI color codes for terminal output
@@ -230,6 +231,11 @@ def main():
 
     # Context for Claude
     context = f"**Deliberate** [{risk}]: {explanation}{llm_unavailable_warning}"
+    if isinstance(evidence, list) and evidence:
+        try:
+            context += "\n\nEvidence:\n" + json.dumps(evidence[:10], ensure_ascii=False, indent=2)[:8000]
+        except Exception:
+            pass
 
     # Output for PostToolUse. `systemMessage` makes it visible to the user.
     # We always include `additionalContext` so Claude still gets the details.
@@ -246,6 +252,7 @@ def main():
         "cwd": cwd,
         "risk": risk,
         "explanation": explanation,
+        "evidence": evidence if isinstance(evidence, list) else [],
         "permissionDecision": "allow"
     })
 

@@ -39,7 +39,16 @@ const DEFAULT_CONFIG = {
   // When disabled, hooks should fail-open and produce no output, making Deliberate
   // effectively inert until re-enabled.
   deliberate: {
-    enabled: true
+    enabled: true,
+
+    // Scoped "web search" for unknown commands/packages.
+    // This is intentionally not arbitrary WebFetch. It only queries known
+    // structured sources and produces evidence that can be shown to the user.
+    webSearch: {
+      enabled: true,
+      sources: ['npm', 'pypi', 'github', 'gitlab'],
+      maxResultsPerSource: 3
+    }
   },
   llm: {
     provider: null,  // 'claude-subscription', 'anthropic', 'ollama', or null

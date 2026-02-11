@@ -162,6 +162,8 @@ To reduce terminal noise, set `gui.terminalExplanations` in `~/.deliberate/confi
 
 Embedded chat works in the TUI. If you do not have keys configured, chat replies in mock mode.
 
+Deliberate also does a scoped “web search” for unknown commands/packages (npm registry, PyPI, GitHub, GitLab) and shows the evidence in the pane/TUI to support approvals.
+
 ### Auto-open pane on Claude Code SessionStart
 
 If you install Deliberate hooks, a Deliberate pane can auto-open at Claude Code session start (one pane per session) and auto-start the local server. This is controlled by:

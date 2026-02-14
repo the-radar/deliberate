@@ -15,8 +15,8 @@ import { spawn } from 'child_process';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { loadConfig, patchConfig, addSkipCommand, addCustomBlock } from '../config.js';
-import { readRecentEvents, tailEventLog } from '../event-log.js';
+import { loadConfig, patchConfig, addSkipCommand, addCustomBlock, addAutoApprovePattern } from '../config.js';
+import { appendEventLog, readRecentEvents, tailEventLog } from '../event-log.js';
 import { streamChat } from '../chat-client.js';
 
 function isTty() {
@@ -80,8 +80,53 @@ function riskOf(event) {
   return 'MODERATE';
 }
 
+function normalizeCommandForPolicy(value) {
+  let command = String(value ?? '').trim().toLowerCase();
+  if (!command) return '';
+
+  if (command.startsWith('sudo ')) {
+    command = command.slice(5).trim();
+  }
+
+  if (command.startsWith('command ')) {
+    command = command.slice(8).trim();
+  }
+
+  if (command.startsWith('env ')) {
+    const parts = command.split(/\s+/);
+    let i = 1;
+    while (i < parts.length && parts[i].includes('=') && !parts[i].startsWith('-')) {
+      i += 1;
+    }
+    command = i < parts.length ? parts.slice(i).join(' ') : '';
+  }
+
+  return command.replace(/\s+/g, ' ').trim();
+}
+
+function extractCommandBase(value) {
+  const normalized = normalizeCommandForPolicy(value);
+  if (!normalized) return '';
+  const first = normalized.split(' ')[0] || '';
+  if (!first) return '';
+  const segments = first.split('/');
+  return segments[segments.length - 1] || first;
+}
+
 function titleOf(event) {
   const type = String(event?.type || '');
+  if (type === 'command_analyzed') {
+    const cmd = typeof event?.data?.command === 'string' ? event.data.command : '(command)';
+    const decision = String(event?.data?.permissionDecision || '');
+    if (decision === 'ask') return `Needs approval: ${cmd}`;
+    if (decision === 'block') return `Blocked: ${cmd}`;
+    if (decision === 'allow') return `Allowed: ${cmd}`;
+    return cmd;
+  }
+  if (type === 'command_post_analysis') {
+    const cmd = typeof event?.data?.command === 'string' ? event.data.command : '(command)';
+    return `Executed: ${cmd}`;
+  }
   if (type === 'command_analysis_progress') {
     const msg = typeof event?.data?.message === 'string' ? event.data.message : 'Analyzing…';
     const cmd = typeof event?.data?.command === 'string' ? event.data.command : '';
@@ -89,6 +134,11 @@ function titleOf(event) {
   }
   if (type === 'file_change_analyzed') {
     return event?.data?.relativePath || event?.data?.filePath || '(file change)';
+  }
+  if (type === 'policy_update') {
+    const action = String(event?.data?.action || 'policy');
+    const pattern = String(event?.data?.pattern || '');
+    return pattern ? `${action}: ${pattern}` : action;
   }
   return event?.data?.command || '(command)';
 }
@@ -119,6 +169,9 @@ function detailsForEvent(event) {
   lines.push(`risk: ${riskOf(event)}`);
 
   const data = event.data || {};
+  if (typeof data.permissionDecision === 'string' && data.permissionDecision) {
+    lines.push(`decision: ${data.permissionDecision}`);
+  }
   if (event.type === 'command_analysis_progress') {
     lines.push('');
     lines.push(`stage: ${String(data.stage || '')}`);
@@ -143,6 +196,12 @@ function detailsForEvent(event) {
     lines.push(data.explanation.trim());
   }
 
+  if (data.autoApproval && typeof data.autoApproval === 'object') {
+    lines.push('');
+    lines.push('autoApproval:');
+    lines.push(prettyJson(data.autoApproval));
+  }
+
   if (Array.isArray(data.evidence) && data.evidence.length) {
     lines.push('');
     lines.push('evidence:');
@@ -164,6 +223,19 @@ function detailsForEvent(event) {
   if (data.backupPath) {
     lines.push('');
     lines.push(`backupPath: ${String(data.backupPath)}`);
+  }
+
+  if (event.type === 'policy_update') {
+    if (typeof data.guidance === 'string' && data.guidance.trim()) {
+      lines.push('');
+      lines.push('guidance:');
+      lines.push(data.guidance.trim());
+    }
+    if (typeof data.note === 'string' && data.note.trim()) {
+      lines.push('');
+      lines.push('note:');
+      lines.push(data.note.trim());
+    }
   }
 
   return lines.join('\n');
@@ -193,6 +265,48 @@ function buildCounts(events) {
     else out.moderate += 1;
   }
   return out;
+}
+
+function buildReviewQueue(events) {
+  const pending = new Map();
+
+  for (const ev of events) {
+    const type = String(ev?.type || '');
+    const analysisId = typeof ev?.data?.analysisId === 'string' ? ev.data.analysisId : null;
+    if (!analysisId) continue;
+
+    if (type === 'command_analysis_progress') {
+      if (!pending.has(analysisId)) {
+        pending.set(analysisId, ev);
+      } else {
+        const existing = pending.get(analysisId);
+        if (String(existing?.type || '') === 'command_analysis_progress') {
+          pending.set(analysisId, ev);
+        }
+      }
+      continue;
+    }
+
+    if (type === 'command_analyzed') {
+      const decision = String(ev?.data?.permissionDecision || '');
+      if (decision === 'ask') {
+        pending.set(analysisId, ev);
+        continue;
+      }
+      if (decision === 'allow' || decision === 'block') {
+        pending.delete(analysisId);
+      }
+      continue;
+    }
+
+    if (type === 'command_post_analysis') {
+      pending.delete(analysisId);
+    }
+  }
+
+  return Array.from(pending.values()).sort((a, b) =>
+    String(a?.timestamp || '').localeCompare(String(b?.timestamp || ''))
+  );
 }
 
 function coalesceTimelineEvents(events) {
@@ -273,8 +387,27 @@ function contextForChat(event) {
     command,
     risk: riskOf(event),
     explanation: typeof data.explanation === 'string' ? data.explanation : '',
-    consequences: data.consequences && typeof data.consequences === 'object' ? data.consequences : null
+    consequences: data.consequences && typeof data.consequences === 'object' ? data.consequences : null,
+    evidence: Array.isArray(data.evidence) ? data.evidence : []
   };
+}
+
+function appendPolicyAuditEvent(event, payload = {}) {
+  const sessionId = String(event?.sessionId || payload.sessionId || 'manual');
+  const data = event?.data || {};
+  const command = typeof data.command === 'string' ? data.command : '';
+  const cwd = typeof data.cwd === 'string' ? data.cwd : process.cwd();
+
+  appendEventLog({
+    type: 'policy_update',
+    timestamp: new Date().toISOString(),
+    sessionId,
+    data: {
+      command,
+      cwd,
+      ...payload
+    }
+  });
 }
 
 export async function runTui(options = {}) {
@@ -295,11 +428,13 @@ export async function runTui(options = {}) {
   const state = {
     follow: options.follow ?? true,
     allSessions: options.allSessions ?? false,
+    viewMode: options.viewMode === 'history' ? 'history' : 'review',
     sessionId: options.sessionId || null,
     events: coalesceTimelineEvents(readRecentEvents({ days: 2, maxEventsPerFile: 2000 })),
     serverOk: false,
     statusMessage: '',
-    deliberateOn
+    deliberateOn,
+    pendingCount: 0
   };
 
   const sessions = buildSessions(state.events);
@@ -316,7 +451,7 @@ export async function runTui(options = {}) {
     title: 'Deliberate'
   });
 
-  const HEADER_HEIGHT = 3;
+  const HEADER_HEIGHT = 4;
   const FOOTER_HEIGHT = 1;
 
   const computeLayout = () => {
@@ -356,7 +491,7 @@ export async function runTui(options = {}) {
     label: ' events ',
     style: {
       border: { fg: 'gray' },
-      selected: { bg: 'blue', fg: 'white' }
+      selected: { bg: 'green', fg: 'black' }
     },
     scrollbar: { ch: ' ', track: { bg: 'gray' }, style: { bg: 'white' } }
   });
@@ -390,10 +525,12 @@ export async function runTui(options = {}) {
 
   const helpText = () => [
     '↑/↓ navigate',
+    'v review/history',
     'a all',
     'n next session',
     'f follow',
-    's skip',
+    's skip exact',
+    'w always allow',
     'b block',
     'd discuss',
     'x toggle',
@@ -414,19 +551,31 @@ export async function runTui(options = {}) {
     const serverDot = state.serverOk ? '●' : '○';
     const followLabel = state.follow ? 'follow' : 'paused';
     const enabledLabel = state.deliberateOn ? 'on' : 'off';
+    const viewLabel = state.viewMode === 'review' ? 'review' : 'history';
 
-    const line1 = `Deliberate (${enabledLabel})  session=${sessionLabel}  total=${counts.total}  safe=${counts.safe}  mod=${counts.moderate}  danger=${counts.dangerous}`;
-    const line2 = `server=${serverBaseUrl}  ${serverDot}  ${followLabel}`;
-    const line3 = state.statusMessage ? state.statusMessage : '';
+    const line1 = `Deliberate (${enabledLabel})  mode=${viewLabel}  pending=${state.pendingCount}  session=${sessionLabel}`;
+    const line2 = `total=${counts.total}  safe=${counts.safe}  mod=${counts.moderate}  danger=${counts.dangerous}`;
+    const line3 = `server=${serverBaseUrl}  ${serverDot}  ${followLabel}`;
+    const line4 = state.statusMessage ? state.statusMessage : '';
 
-    header.setContent([line1, line2, line3].join('\n'));
+    header.setContent([line1, line2, line3, line4].join('\n'));
   };
 
   const applyFilter = () => {
+    let bySession = [];
     if (state.allSessions || !state.sessionId) {
-      filtered = state.events.slice();
+      bySession = state.events.slice();
     } else {
-      filtered = state.events.filter((e) => String(e.sessionId || '') === String(state.sessionId));
+      bySession = state.events.filter((e) => String(e.sessionId || '') === String(state.sessionId));
+    }
+
+    const pending = buildReviewQueue(bySession);
+    state.pendingCount = pending.length;
+
+    if (state.viewMode === 'review') {
+      filtered = pending;
+    } else {
+      filtered = bySession;
     }
   };
 
@@ -434,6 +583,7 @@ export async function runTui(options = {}) {
     const width = typeof list.width === 'number' ? list.width : screen.width;
     const items = filtered.map((ev) => summarizeEvent(ev, width - 6));
     list.setItems(items);
+    list.setLabel(` ${state.viewMode === 'review' ? 'review queue' : 'history'} `);
 
     if (!keepSelection) {
       selectedIndex = Math.max(0, items.length - 1);
@@ -525,6 +675,13 @@ export async function runTui(options = {}) {
     renderAll({ keepSelection: false });
   });
 
+  screen.key(['v'], () => {
+    state.viewMode = state.viewMode === 'review' ? 'history' : 'review';
+    selectedIndex = 0;
+    setStatus(state.viewMode === 'review' ? 'review queue' : 'history view');
+    renderAll({ keepSelection: false });
+  });
+
   screen.key(['n'], () => cycleSession(1));
   screen.key(['p'], () => cycleSession(-1));
 
@@ -563,7 +720,11 @@ export async function runTui(options = {}) {
     }
     try {
       addSkipCommand(command);
-      setStatus('added to skip list');
+      appendPolicyAuditEvent(event, {
+        action: 'skip_exact_command',
+        pattern: command
+      });
+      setStatus('saved: skip exact command');
     } catch {
       setStatus('skip failed');
     }
@@ -578,7 +739,11 @@ export async function runTui(options = {}) {
     }
     try {
       addCustomBlock(command);
-      setStatus('added to block list');
+      appendPolicyAuditEvent(event, {
+        action: 'block_pattern',
+        pattern: command
+      });
+      setStatus('saved: block pattern');
     } catch {
       setStatus('block failed');
     }
@@ -589,6 +754,15 @@ export async function runTui(options = {}) {
       const next = !state.deliberateOn;
       config = patchConfig({ deliberate: { enabled: next } });
       state.deliberateOn = next;
+      appendEventLog({
+        type: 'policy_update',
+        timestamp: new Date().toISOString(),
+        sessionId: state.sessionId || 'manual',
+        data: {
+          action: next ? 'enable_deliberate' : 'disable_deliberate',
+          cwd: process.cwd()
+        }
+      });
       setStatus(next ? 'deliberate enabled' : 'deliberate disabled');
       renderHeader();
       screen.render();
@@ -596,6 +770,192 @@ export async function runTui(options = {}) {
       setStatus('toggle failed');
     }
   });
+
+  const openAlwaysAllow = () => {
+    const event = filtered[selectedIndex];
+    const command = event?.data?.command;
+    if (typeof command !== 'string' || !command.trim()) {
+      setStatus('always allow: no command selected');
+      return;
+    }
+
+    const normalized = normalizeCommandForPolicy(command);
+    const suggestedPattern = extractCommandBase(command) || normalized;
+
+    const overlay = blessed.box({
+      parent: screen,
+      top: 'center',
+      left: 'center',
+      width: '96%',
+      height: '90%',
+      border: 'line',
+      label: ' always allow policy (esc to close) ',
+      style: { border: { fg: 'gray' } }
+    });
+
+    const guidance = blessed.box({
+      parent: overlay,
+      top: 0,
+      left: 0,
+      width: '100%',
+      bottom: 6,
+      border: 'line',
+      label: ' guidance ',
+      scrollable: true,
+      alwaysScroll: true,
+      keys: true,
+      vi: true,
+      mouse: true,
+      style: { border: { fg: 'gray' }, fg: 'white' }
+    });
+
+    const hint = blessed.box({
+      parent: overlay,
+      bottom: 3,
+      left: 0,
+      width: '100%',
+      height: 3,
+      border: 'line',
+      label: ' instructions ',
+      content: `Edit pattern, press Enter to confirm. Suggested: ${suggestedPattern}`,
+      style: { border: { fg: 'gray' }, fg: 'gray' }
+    });
+
+    const patternInput = blessed.textbox({
+      parent: overlay,
+      bottom: 0,
+      left: 0,
+      width: '100%',
+      height: 3,
+      border: 'line',
+      label: ' pattern ',
+      inputOnFocus: true,
+      style: {
+        border: { fg: 'gray' },
+        focus: { border: { fg: 'white' } }
+      }
+    });
+
+    let guidanceText = [
+      'Generating policy guidance…',
+      '',
+      `Command: ${command}`,
+      `Risk: ${riskOf(event)}`,
+      '',
+      'Why this step exists:',
+      '- Always-allow rules reduce approval prompts.',
+      '- Broader patterns increase blast radius.',
+      '- Prefer the narrowest rule that still matches your workflow.'
+    ].join('\n');
+
+    let streamingAbort = null;
+
+    const renderGuidance = () => {
+      guidance.setContent(guidanceText);
+      guidance.setScrollPerc(100);
+      screen.render();
+    };
+
+    const close = () => {
+      try {
+        streamingAbort?.abort();
+      } catch {
+        // ignore
+      }
+      overlay.detach();
+      screen.render();
+      list.focus();
+    };
+
+    overlay.key(['escape'], close);
+    guidance.key(['escape'], close);
+    patternInput.key(['escape'], close);
+
+    patternInput.on('submit', (value) => {
+      const pattern = String(value || '').trim();
+      if (!pattern) {
+        setStatus('pattern required');
+        patternInput.focus();
+        return;
+      }
+
+      const question = blessed.question({
+        parent: overlay,
+        top: 'center',
+        left: 'center',
+        width: '80%',
+        height: 7,
+        border: 'line',
+        label: ' confirm ',
+        keys: true,
+        vi: true
+      });
+
+      question.ask(`Save always-allow pattern "${pattern}"?`, (ok) => {
+        question.destroy();
+        if (!ok) {
+          patternInput.focus();
+          screen.render();
+          return;
+        }
+
+        try {
+          addAutoApprovePattern(pattern);
+          appendPolicyAuditEvent(event, {
+            action: 'auto_approve_pattern_add',
+            pattern,
+            note: `Suggested pattern was: ${suggestedPattern}`,
+            guidance: guidanceText.slice(0, 4000)
+          });
+          setStatus(`saved always-allow pattern: ${truncate(pattern, 60)}`);
+          close();
+        } catch {
+          setStatus('always allow failed');
+          patternInput.focus();
+          screen.render();
+        }
+      });
+    });
+
+    patternInput.setValue(suggestedPattern);
+    renderGuidance();
+    patternInput.focus();
+    screen.render();
+
+    const controller = new AbortController();
+    streamingAbort = controller;
+    const policyPrompt = [
+      'I want to configure an always-allow rule for this shell command.',
+      'Give a short risk summary and suggest least-privileged pattern options.',
+      'Format as plain text with these headings:',
+      'Risk summary',
+      'Recommended rule',
+      'If you need broader scope'
+    ].join('\n');
+
+    streamChat({
+      messages: [{ role: 'user', content: policyPrompt }],
+      context: contextForChat(event),
+      signal: controller.signal,
+      onEvent: (ev) => {
+        if (!ev || typeof ev !== 'object') return;
+        if (ev.type === 'token') {
+          guidanceText += ev.text;
+          renderGuidance();
+          return;
+        }
+        if (ev.type === 'error') {
+          guidanceText += `\n\n[guidance error] ${ev.message || 'unknown error'}`;
+          renderGuidance();
+        }
+      }
+    }).catch(() => {
+      guidanceText += '\n\n[guidance error] failed to generate guidance';
+      renderGuidance();
+    });
+  };
+
+  screen.key(['w'], openAlwaysAllow);
 
   const openChat = () => {
     const event = filtered[selectedIndex];

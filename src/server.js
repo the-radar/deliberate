@@ -11,7 +11,7 @@ import os from 'os';
 import path from 'path';
 import { classify, quickCheck, getStatus, preloadModel } from './classifier/index.js';
 import { createBroadcaster } from './ws-broadcaster.js';
-import { loadConfig, patchConfig, addSkipCommand, addCustomBlock } from './config.js';
+import { loadConfig, patchConfig, addSkipCommand, addCustomBlock, addAutoApprovePattern } from './config.js';
 import { handleChatSse } from './chat-handler.js';
 import { appendEventLog, cleanupOldEventLogs, readRecentEvents } from './event-log.js';
 
@@ -334,6 +334,16 @@ function createApp(broadcaster = createBroadcaster()) {
     }
   });
 
+  app.post('/api/config/auto-approve', (req, res) => {
+    try {
+      const { pattern, command } = req.body || {};
+      const next = addAutoApprovePattern(pattern || command);
+      res.json(sanitizeConfigForUi(next));
+    } catch (error) {
+      res.status(400).json({ error: error.message });
+    }
+  });
+
   // Chat endpoint, streams SSE to the GUI.
   app.post('/api/chat', async (req, res) => {
     try {
@@ -405,6 +415,7 @@ export async function startServer(port = DEFAULT_PORT, options = {}) {
       console.log('  PATCH /api/config      - GUI config patch');
       console.log('  POST /api/config/skip  - Add skip command');
       console.log('  POST /api/config/block - Add custom block pattern');
+      console.log('  POST /api/config/auto-approve - Add auto-approve pattern');
       console.log('  POST /api/chat         - Command chat SSE');
       console.log('  WS   /ws               - Real-time event stream');
       resolve(server);

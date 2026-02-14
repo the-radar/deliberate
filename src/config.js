@@ -48,6 +48,12 @@ const DEFAULT_CONFIG = {
       enabled: true,
       sources: ['npm', 'pypi', 'github', 'gitlab'],
       maxResultsPerSource: 3
+    },
+
+    // Auto-approve rules still run analysis/logging, but they skip interactive
+    // approval prompts for matching commands.
+    autoApprove: {
+      patterns: []
     }
   },
   llm: {
@@ -265,6 +271,25 @@ export function addCustomBlock(pattern) {
 }
 
 /**
+ * Add a pattern to auto-approve list.
+ * Matching is simple substring on normalized command in hooks.
+ */
+export function addAutoApprovePattern(pattern) {
+  const entry = normalizeListEntry(pattern);
+  if (!entry) {
+    throw new Error('Missing required field: pattern');
+  }
+  const config = loadConfig();
+  const deliberate = config.deliberate || DEFAULT_CONFIG.deliberate;
+  const autoApprove = deliberate.autoApprove || { patterns: [] };
+  autoApprove.patterns = boundedUniqueAppend(autoApprove.patterns, entry);
+  deliberate.autoApprove = autoApprove;
+  config.deliberate = deliberate;
+  saveConfig(config);
+  return config;
+}
+
+/**
  * Get LLM configuration for hooks
  * Returns environment-variable-friendly format
  * @returns {Object} LLM config with provider, url, key, model
@@ -375,6 +400,7 @@ export default {
   patchConfig,
   addSkipCommand,
   addCustomBlock,
+  addAutoApprovePattern,
   getLLMConfig,
   setLLMProvider,
   isLLMConfigured,

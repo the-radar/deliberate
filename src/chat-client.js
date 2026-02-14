@@ -61,6 +61,11 @@ function buildSystemPrompt(context) {
     parts.push('Consequences (structured):');
     parts.push(JSON.stringify(context.consequences, null, 2));
   }
+  if (Array.isArray(context.evidence) && context.evidence.length) {
+    parts.push('');
+    parts.push('Evidence (sources):');
+    parts.push(JSON.stringify(context.evidence.slice(0, 8), null, 2));
+  }
 
   return parts.join('\n');
 }
@@ -170,7 +175,8 @@ export async function streamChat({ messages, context = {}, maxTokens, onEvent, s
       command: safeString(context.command, 10_000),
       risk: safeString(context.risk, 100),
       explanation: safeString(context.explanation, 10_000),
-      consequences: context.consequences && typeof context.consequences === 'object' ? context.consequences : null
+      consequences: context.consequences && typeof context.consequences === 'object' ? context.consequences : null,
+      evidence: Array.isArray(context.evidence) ? context.evidence : null
     });
 
     const payload = {
@@ -280,4 +286,3 @@ export async function streamChat({ messages, context = {}, maxTokens, onEvent, s
 }
 
 export default { streamChat };
-

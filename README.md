@@ -164,6 +164,15 @@ Embedded chat works in the TUI. If you do not have keys configured, chat replies
 
 Deliberate also does a scoped “web search” for unknown commands/packages (npm registry, PyPI, GitHub, GitLab) and shows the evidence in the pane/TUI to support approvals.
 
+The TUI now starts in a review queue mode so pending approvals stay front and center. Press `v` to switch between review queue and full history.
+
+Key review actions:
+- `w` add an **always-allow** policy pattern (guided, with risk text)
+- `s` skip exact command (don’t flag this exact command again)
+- `b` add a block pattern
+- `d` discuss selected item in embedded chat
+- `x` disable/enable Deliberate globally
+
 ### Auto-open pane on Claude Code SessionStart
 
 If you install Deliberate hooks, a Deliberate pane can auto-open at Claude Code session start (one pane per session) and auto-start the local server. This is controlled by:
@@ -177,6 +186,10 @@ If you install Deliberate hooks, a Deliberate pane can auto-open at Claude Code 
 ### Disable / enable Deliberate (quick toggle)
 
 In the TUI, press `x` to toggle Deliberate on/off. When off, hooks fail-open and produce no output until you re-enable it.
+
+### Auto-approve patterns ("always allow")
+
+Deliberate supports explicit policy patterns at `deliberate.autoApprove.patterns` in `~/.deliberate/config.json`. Matching commands still get analyzed and logged, but they skip interactive approval prompts unless they hit a hard dangerous auto-block.
 
 ## Deliberate GUI (Desktop, optional)
 

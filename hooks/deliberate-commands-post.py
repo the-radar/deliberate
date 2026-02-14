@@ -201,6 +201,7 @@ def main():
     llm_unavailable_warning = cached.get("llm_unavailable_warning", "")
     evidence = cached.get("evidence", [])
     analysis_id = cached.get("analysisId")
+    auto_approval = cached.get("autoApproval")
     surfacing_mode = load_terminal_explanations_mode()
 
     # ANSI color codes for terminal output
@@ -229,9 +230,17 @@ def main():
     else:
         # Full explanation in terminal (v1 behavior).
         user_message = f"{emoji} {BOLD}{CYAN}DELIBERATE{RESET} {BOLD}{color}[{risk}]{RESET}\n    {color}{explanation}{RESET}{llm_unavailable_warning}"
+        if isinstance(auto_approval, dict) and auto_approval.get("matched"):
+            pattern = str(auto_approval.get("pattern") or "").strip()
+            if pattern:
+                user_message += f"\n    {CYAN}Auto-approved by policy rule:{RESET} {pattern}"
 
     # Context for Claude
     context = f"**Deliberate** [{risk}]: {explanation}{llm_unavailable_warning}"
+    if isinstance(auto_approval, dict) and auto_approval.get("matched"):
+        pattern = str(auto_approval.get("pattern") or "").strip()
+        if pattern:
+            context += f"\n\nPolicy: auto-approved by rule `{pattern}`"
     if isinstance(evidence, list) and evidence:
         try:
             context += "\n\nEvidence:\n" + json.dumps(evidence[:10], ensure_ascii=False, indent=2)[:8000]
@@ -255,6 +264,7 @@ def main():
         "risk": risk,
         "explanation": explanation,
         "evidence": evidence if isinstance(evidence, list) else [],
+        "autoApproval": auto_approval if isinstance(auto_approval, dict) else None,
         "permissionDecision": "allow"
     })
 

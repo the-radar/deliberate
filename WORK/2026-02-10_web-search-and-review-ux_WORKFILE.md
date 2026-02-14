@@ -26,13 +26,13 @@ Success looks like: when Deliberate doesn’t recognize a command or package (ex
   - [x] Query GitHub repo search: `https://api.github.com/search/repositories?q=<name>&per_page=3` (timeout).
   - [x] Query GitLab project search: `https://gitlab.com/api/v4/projects?search=<name>` (timeout).
   - [x] Convert results into a compact evidence block with URLs.
-  - [ ] Cache per-session per-name lookups to avoid repeated network calls.
+  - [x] Cache per-session per-name lookups to avoid repeated network calls.
 - [ ] Feed evidence into the LLM explanation prompt and include citations/URLs in user-facing explanation (pane/TUI).
 - [x] Feed evidence into the LLM explanation prompt and include citations/URLs in user-facing explanation (pane/TUI).
 - [x] Add incremental analysis progress events and coalesced in-place updates in TUI.
 - [ ] Add “review-first” UX scaffolding:
-  - [ ] Add/confirm “pending approvals” view to the TUI (separate from history).
-  - [ ] Add a place to show evidence and the approval interview transcript.
+  - [x] Add/confirm “pending approvals” view to the TUI (separate from history).
+  - [x] Add a place to show evidence and the approval interview transcript.
 - [ ] Tests:
   - [ ] Unit test: parsing package names from commands.
   - [ ] Unit test: web lookup functions with mocked HTTP responses.
@@ -57,4 +57,4 @@ Success looks like: when Deliberate doesn’t recognize a command or package (ex
 - Ensure hooks still complete when network is blocked or endpoints are down.
 
 ## Progress tracking
-- Now: implement scoped web lookup + wire into explanation prompt, then iterate on UX.
+- Implemented scoped web lookup, evidence surfacing, per-session cache, and review-first TUI queue with guided always-allow policy flow.

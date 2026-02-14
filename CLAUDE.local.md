@@ -45,13 +45,16 @@ Pivot Deliberate v2 UX to a terminal-native TUI + split-pane workflow (WezTerm-f
   - Installer no longer hard-fails on missing `claude-agent-sdk` (optional, not required for core functionality)
   - Scoped web search evidence for unknown commands/packages (npm, PyPI, GitHub, GitLab), shown in pane/TUI and included in hook context
   - Incremental command analysis progress events (`command_analysis_progress`) with per-analysis IDs, plus TUI coalescing so progress rows update in place until final decision
+  - Review-first TUI mode (pending approvals queue by default, history view toggle)
+  - Guided “always allow” policy flow in TUI with embedded chat guidance and explicit confirmation
+  - Hook-level `deliberate.autoApprove.patterns` support with preserved audit trail metadata
+  - Scoped web evidence cache per session to reduce repeated network lookups
 
 ### Now:
-- Manual verification in WezTerm/tmux for progressive in-place updates during analysis and final row replacement.
+- Final validation sweep (targeted tests + full suite behavior) and release-ready documentation pass.
 
 ### Next:
 - Decide release packaging for GUI vs TUI (binary distribution and how users should choose UI mode by environment).
-- Build review-first TUI flow (pending approvals + evidence + interview transcript) and policy “always allow” experience.
 
 ## Open Questions:
 - None for core v2 implementation. Remaining work is polish and release flow decisions (GUI binary distribution, signing).

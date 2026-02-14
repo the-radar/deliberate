@@ -69,6 +69,13 @@ test('config endpoints read + mutate config file', async () => {
     });
     assert.equal(blockRes.status, 200);
 
+    const autoApproveRes = await fetch(`${base}/api/config/auto-approve`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pattern: 'browser-use' })
+    });
+    assert.equal(autoApproveRes.status, 200);
+
     const patchRes = await fetch(`${base}/api/config`, {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
@@ -81,6 +88,7 @@ test('config endpoints read + mutate config file', async () => {
     const disk = JSON.parse(fs.readFileSync(configFile, 'utf-8'));
     assert.ok(disk.skipCommands.additional.includes('git status --porcelain'));
     assert.ok(disk.customBlocklist.includes('rm -rf /'));
+    assert.ok(disk.deliberate.autoApprove.patterns.includes('browser-use'));
     assert.equal(disk.gui.alwaysOnTop, false);
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -121,4 +129,3 @@ test('chat endpoint streams SSE (mock mode)', async () => {
     delete process.env.DELIBERATE_CHAT_MODE;
   }
 });
-

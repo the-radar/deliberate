@@ -47,6 +47,8 @@ TIMEOUT_SECONDS = 30
 CLASSIFIER_TIMEOUT = 5  # Classifier should be fast
 DEBUG = False
 USE_CLASSIFIER = True  # Try classifier first if available
+WEB_CACHE_TTL_SECONDS = 6 * 60 * 60
+WEB_CACHE_MAX_ENTRIES = 120
 
 # Session state for deduplication
 
@@ -59,6 +61,11 @@ def get_state_file(session_id: str) -> str:
 def get_history_file(session_id: str) -> str:
     """Get session-specific command history file path."""
     return os.path.expanduser(f"~/.claude/deliberate_cmd_history_{session_id}.json")
+
+
+def get_web_lookup_cache_file(session_id: str) -> str:
+    """Get session-scoped cache file for web lookup evidence."""
+    return os.path.expanduser(f"~/.claude/deliberate_web_lookup_{session_id}.json")
 
 
 def cleanup_old_state_files():
@@ -94,6 +101,31 @@ def load_state(session_id: str) -> set:
         except (json.JSONDecodeError, IOError):
             return set()
     return set()
+
+
+def load_web_lookup_cache(session_id: str) -> dict:
+    """Load per-session web lookup cache (best-effort)."""
+    cache_file = get_web_lookup_cache_file(session_id)
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                return data
+        except (json.JSONDecodeError, IOError):
+            return {}
+    return {}
+
+
+def save_web_lookup_cache(session_id: str, cache: dict):
+    """Persist per-session web lookup cache (best-effort)."""
+    cache_file = get_web_lookup_cache_file(session_id)
+    try:
+        os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(cache, f)
+    except IOError:
+        pass
 
 def _event_log_dir() -> str:
     """Directory for JSONL event logs used by the Deliberate TUI.
@@ -1279,21 +1311,39 @@ def _local_node_bin_evidence(name: str, cwd: str) -> Optional[dict]:
         return None
 
 
-def web_search_evidence(command: str, cwd: str) -> List[dict]:
-    """Scoped web search that returns evidence objects (fail-open)."""
+def web_search_evidence(command: str, cwd: str, session_id: str) -> List[dict]:
+    """Scoped web search that returns evidence objects (fail-open).
+
+    We cache per-session lookups so repeated tools (for example browser-use)
+    do not trigger fresh network requests on every command.
+    """
     ws = load_web_search_config()
     if not ws.get("enabled", True):
         return []
 
     sources = set(ws.get("sources") or [])
     max_results = ws.get("maxResultsPerSource", 3)
+    cache = load_web_lookup_cache(session_id)
+    cache_dirty = False
+    now_ts = time.time()
 
     evidence: List[dict] = []
 
     for name in _extract_candidate_names(command):
+        cache_key = str(name or "").lower()
+        cached_entry = cache.get(cache_key) if isinstance(cache, dict) else None
+        if isinstance(cached_entry, dict):
+            ts = cached_entry.get("ts", 0)
+            age_ok = isinstance(ts, (int, float)) and (now_ts - float(ts)) < WEB_CACHE_TTL_SECONDS
+            cached_items = cached_entry.get("evidence", [])
+            if age_ok and isinstance(cached_items, list):
+                evidence.extend(cached_items)
+                continue
+
+        name_evidence: List[dict] = []
         local = _local_node_bin_evidence(name, cwd)
         if local:
-            evidence.append(local)
+            name_evidence.append(local)
 
         enc = urllib.parse.quote(name, safe="@/._-")
 
@@ -1304,7 +1354,7 @@ def web_search_evidence(command: str, cwd: str) -> List[dict]:
                 latest = dist.get("latest")
                 repo = (data.get("repository") or {}) if isinstance(data.get("repository"), dict) else {}
                 url = data.get("homepage") or repo.get("url")
-                evidence.append({
+                name_evidence.append({
                     "source": "npm",
                     "name": data.get("name"),
                     "version": latest,
@@ -1317,7 +1367,7 @@ def web_search_evidence(command: str, cwd: str) -> List[dict]:
             data = _http_get_json(f"https://pypi.org/pypi/{enc}/json")
             info = (data or {}).get("info") if isinstance(data, dict) else None
             if info and isinstance(info, dict) and info.get("name"):
-                evidence.append({
+                name_evidence.append({
                     "source": "pypi",
                     "name": info.get("name"),
                     "version": info.get("version"),
@@ -1333,7 +1383,7 @@ def web_search_evidence(command: str, cwd: str) -> List[dict]:
                 for item in items[:max_results]:
                     if not isinstance(item, dict):
                         continue
-                    evidence.append({
+                    name_evidence.append({
                         "source": "github",
                         "name": item.get("full_name") or item.get("name"),
                         "description": item.get("description"),
@@ -1348,7 +1398,7 @@ def web_search_evidence(command: str, cwd: str) -> List[dict]:
                 for item in data[:max_results]:
                     if not isinstance(item, dict):
                         continue
-                    evidence.append({
+                    name_evidence.append({
                         "source": "gitlab",
                         "name": item.get("path_with_namespace") or item.get("name"),
                         "description": item.get("description"),
@@ -1356,6 +1406,26 @@ def web_search_evidence(command: str, cwd: str) -> List[dict]:
                         "stars": item.get("star_count"),
                         "confidence": "low",
                     })
+
+        evidence.extend(name_evidence)
+        if cache_key:
+            cache[cache_key] = {
+                "ts": now_ts,
+                "evidence": name_evidence[:20]
+            }
+            cache_dirty = True
+
+    if cache_dirty and isinstance(cache, dict):
+        # Keep cache bounded so session cache files do not grow unbounded.
+        keys = list(cache.keys())
+        if len(keys) > WEB_CACHE_MAX_ENTRIES:
+            keys_sorted = sorted(
+                keys,
+                key=lambda k: (cache.get(k) or {}).get("ts", 0)
+            )
+            for stale_key in keys_sorted[: len(keys) - WEB_CACHE_MAX_ENTRIES]:
+                cache.pop(stale_key, None)
+        save_web_lookup_cache(session_id, cache)
 
     deduped: List[dict] = []
     seen = set()
@@ -1486,8 +1556,37 @@ def load_custom_blocklist() -> list:
     return out
 
 
+def load_auto_approve_patterns() -> list:
+    """Load user-defined auto-approve patterns from config."""
+    deliberate = (_load_config().get("deliberate", {}) or {})
+    auto_cfg = (deliberate.get("autoApprove", {}) or {})
+    patterns = auto_cfg.get("patterns", [])
+    if not isinstance(patterns, list):
+        return []
+
+    out = []
+    for p in patterns:
+        if isinstance(p, str) and p.strip():
+            out.append(p.strip())
+    return out
+
+
 def custom_blocklist_match(command: str, patterns: list) -> str | None:
     """Return the matching pattern if command hits the custom blocklist."""
+    if not patterns:
+        return None
+    haystack = normalize_command_for_custom_lists(command)
+    if not haystack:
+        return None
+    for p in patterns:
+        needle = normalize_command_for_custom_lists(p)
+        if needle and needle in haystack:
+            return p
+    return None
+
+
+def auto_approve_match(command: str, patterns: list) -> str | None:
+    """Return matching auto-approve pattern if command is covered."""
     if not patterns:
         return None
     haystack = normalize_command_for_custom_lists(command)
@@ -2105,7 +2204,7 @@ def main():
     # This is used to make explanations more trustworthy and to drive follow-up
     # questions for approvals.
     broadcast_progress(session_id, analysis_id, command, cwd, "web_search", "Checking npm/PyPI/GitHub/GitLab evidence")
-    evidence = web_search_evidence(command, cwd)
+    evidence = web_search_evidence(command, cwd, session_id)
     if evidence:
         broadcast_progress(session_id, analysis_id, command, cwd, "web_search_done", f"Found {len(evidence)} evidence item(s)")
     else:
@@ -2227,6 +2326,14 @@ def main():
         else:
             explanation = "Review command before proceeding"
 
+    matched_auto_approve_pattern = auto_approve_match(command, load_auto_approve_patterns())
+    auto_approval = None
+    if matched_auto_approve_pattern:
+        auto_approval = {
+            "matched": True,
+            "pattern": matched_auto_approve_pattern
+        }
+
     # NOTE: Deduplication is handled AFTER block/allow decision
     # We moved it below to prevent blocked commands from being allowed on retry
 
@@ -2240,7 +2347,8 @@ def main():
         "explanation": explanation,
         "command": command[:200],  # Truncate for cache
         "llm_unavailable_warning": llm_unavailable_warning,
-        "evidence": evidence
+        "evidence": evidence,
+        "autoApproval": auto_approval
     })
 
     # Add command to session history for workflow tracking
@@ -2259,6 +2367,7 @@ def main():
             "consequences": destruction_consequences,
             "workflowPatterns": workflow_patterns,
             "backupPath": None,
+            "autoApproval": auto_approval,
             "permissionDecision": "allow"
         })
         debug(f"Auto-allowing SAFE command, cached for PostToolUse")
@@ -2305,6 +2414,7 @@ def main():
                 "consequences": destruction_consequences,
                 "workflowPatterns": workflow_patterns,
                 "backupPath": backup_path,
+                "autoApproval": auto_approval,
                 "permissionDecision": "block"
             })
             # Auto-block with exit code 2 - cannot proceed
@@ -2315,6 +2425,33 @@ def main():
             print(block_message, file=sys.stderr)
             debug(f"Auto-blocked DANGEROUS command (classifier={classifier_dangerous}, llm={llm_dangerous}, script={script_content is not None})")
             sys.exit(2)
+
+    # Explicit user policy: always allow matching commands without prompting.
+    # We still run full analysis and keep audit events/cached summaries.
+    if auto_approval:
+        broadcast_progress(
+            session_id,
+            analysis_id,
+            command,
+            cwd,
+            "policy",
+            f"Auto-approved by policy pattern: {matched_auto_approve_pattern}"
+        )
+        broadcast_event("command_analyzed", session_id, {
+            "analysisId": analysis_id,
+            "command": command,
+            "cwd": cwd,
+            "risk": risk,
+            "explanation": explanation,
+            "evidence": evidence,
+            "consequences": destruction_consequences,
+            "workflowPatterns": workflow_patterns,
+            "backupPath": backup_path,
+            "autoApproval": auto_approval,
+            "permissionDecision": "allow"
+        })
+        debug(f"Auto-approved by policy: {matched_auto_approve_pattern}")
+        sys.exit(0)
 
     # ANSI color codes for terminal output
     BOLD = "\033[1m"
@@ -2411,6 +2548,7 @@ def main():
         "consequences": destruction_consequences,
         "workflowPatterns": workflow_patterns,
         "backupPath": backup_path,
+        "autoApproval": auto_approval,
         "permissionDecision": "ask"
     })
 

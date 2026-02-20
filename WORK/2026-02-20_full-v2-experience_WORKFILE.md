@@ -100,8 +100,8 @@ Must complete and harden:
 - `python3 -m unittest hooks.tests.test_deliberate_commands -v` passed.
 - Targeted node tests passed:
   - `node --test --test-concurrency=1 test/config-defaults.test.mjs test/config-chat-api.test.mjs test/event-log.test.mjs test/chat-client.test.mjs test/ws-broadcaster.test.mjs`
-- Full `npm test` currently fails because the local classifier model environment is missing required `huggingface-hub` version (`>=0.34.0,<1.0`). This affects pre-existing suites:
+- Full `npm test` still has pre-existing classifier expectation mismatches in model-evaluation suites:
   - `/Users/h4tch1ing/Documents/deliberate/test/test-aws-cli.mjs`
   - `/Users/h4tch1ing/Documents/deliberate/test/test-classifier.mjs`
   - `/Users/h4tch1ing/Documents/deliberate/test/test-edge-cases.mjs`
-  - `/Users/h4tch1ing/Documents/deliberate/test/test-novel-commands.mjs`
+  - (`/Users/h4tch1ing/Documents/deliberate/test/test-novel-commands.mjs` now passes)

@@ -1218,6 +1218,153 @@ def _http_get_json(url: str, timeout_s: float = 0.8, max_bytes: int = 250_000) -
         return None
 
 
+def _extract_repo_candidates(ref: str) -> List[str]:
+    """Extract repository name candidates from git/GitHub/GitLab references."""
+    text = str(ref or "").strip()
+    if not text:
+        return []
+
+    out: List[str] = []
+
+    # Prefer explicit egg names when provided in pip style URLs.
+    egg_match = re.search(r"#egg=([A-Za-z0-9_.\-]+)", text)
+    if egg_match:
+        out.append(egg_match.group(1))
+
+    # `github:owner/repo` and `gitlab:group/repo` shorthand.
+    for shorthand in ("github:", "gitlab:"):
+        if text.startswith(shorthand):
+            slug = text.split(":", 1)[1]
+            slug = slug.split("#", 1)[0].split("?", 1)[0].strip("/")
+            if slug.endswith(".git"):
+                slug = slug[:-4]
+            if slug:
+                out.append(slug)
+                out.append(slug.split("/")[-1])
+
+    # URL and SSH formats:
+    # - https://github.com/owner/repo(.git)
+    # - git@github.com:owner/repo(.git)
+    # - https://gitlab.com/group/subgroup/repo(.git)
+    repo_match = re.search(r"(?:https?://|git@)(?:www\.)?(github\.com|gitlab\.com)[:/]+([^\s#?]+)", text)
+    if repo_match:
+        path_part = repo_match.group(2).strip("/")
+        if path_part.endswith(".git"):
+            path_part = path_part[:-4]
+        if path_part:
+            out.append(path_part)
+            out.append(path_part.split("/")[-1])
+
+    # De-duplicate while keeping order.
+    deduped: List[str] = []
+    seen = set()
+    for name in out:
+        n = str(name or "").strip()
+        if not n or n in seen:
+            continue
+        seen.add(n)
+        deduped.append(n)
+    return deduped
+
+
+def _normalize_package_candidate(raw: str) -> Optional[str]:
+    """Normalize package-like tokens from install commands."""
+    value = str(raw or "").strip().strip(",")
+    if not value:
+        return None
+
+    # Filter obvious non-package tokens early.
+    if value in ("|", "||", "&&", ";") or value.startswith("-"):
+        return None
+    if value.startswith(("/", "./", "../", "~/")):
+        return None
+
+    # Repo references are handled by a dedicated helper.
+    if value.startswith(("git+", "http://", "https://", "git@")):
+        return None
+    if "github.com/" in value or "gitlab.com/" in value:
+        return None
+    if value.startswith(("github:", "gitlab:")):
+        return None
+
+    # Strip environment markers used by pip (`; python_version ...`).
+    value = value.split(";", 1)[0].strip()
+    if not value:
+        return None
+
+    # Strip extras suffix (`package[extra]`).
+    value = re.sub(r"\[[^\]]+\]$", "", value).strip()
+    if not value:
+        return None
+
+    # Strip pip-style version constraints.
+    value = re.split(r"(?:==|~=|!=|>=|<=|>|<)", value, maxsplit=1)[0].strip()
+    if not value:
+        return None
+
+    # Strip npm-style @version while preserving @scope/pkg names.
+    if value.startswith("@"):
+        # @scope/pkg@1.2.3 -> @scope/pkg
+        if "@" in value[1:]:
+            value = value.rsplit("@", 1)[0].strip()
+    elif "@" in value:
+        # package@1.2.3 -> package
+        value = value.split("@", 1)[0].strip()
+
+    if not value:
+        return None
+
+    # Avoid path-like references unless they are scoped npm packages.
+    if "/" in value and not value.startswith("@"):
+        return None
+
+    return value
+
+
+def _collect_install_tokens(tokens: List[str]) -> List[str]:
+    """Collect likely package tokens from common install/exec command forms."""
+    if not tokens:
+        return []
+
+    def is_sep(tok: str) -> bool:
+        return tok in ("|", "||", "&&", ";")
+
+    start = None
+    prefix = tuple(tokens[:4])
+
+    if len(tokens) >= 2 and tokens[0] == "npm" and tokens[1] in ("install", "i", "add", "exec", "x", "pack"):
+        start = 2
+    elif len(tokens) >= 2 and tokens[0] == "pnpm" and tokens[1] in ("add", "install", "dlx"):
+        start = 2
+    elif len(tokens) >= 2 and tokens[0] == "yarn" and tokens[1] in ("add", "dlx"):
+        start = 2
+    elif len(tokens) >= 2 and tokens[0] in ("npx", "bunx"):
+        start = 1
+    elif len(tokens) >= 2 and tokens[0] == "bun" and tokens[1] in ("add", "x"):
+        start = 2
+    elif len(tokens) >= 2 and tokens[0] in ("pip", "pip3") and tokens[1] == "install":
+        start = 2
+    elif len(tokens) >= 4 and prefix[:4] in (
+        ("python", "-m", "pip", "install"),
+        ("python3", "-m", "pip", "install"),
+    ):
+        start = 4
+    elif len(tokens) >= 3 and tuple(tokens[:3]) == ("uv", "pip", "install"):
+        start = 3
+    elif len(tokens) >= 3 and tuple(tokens[:3]) == ("uv", "tool", "install"):
+        start = 3
+
+    if start is None:
+        return []
+
+    out: List[str] = []
+    for token in tokens[start:]:
+        if is_sep(token):
+            break
+        out.append(token)
+    return out
+
+
 def _extract_candidate_names(command: str) -> List[str]:
     """Best-effort extract likely package/binary names from a shell command."""
     try:
@@ -1230,28 +1377,27 @@ def _extract_candidate_names(command: str) -> List[str]:
 
     candidates: List[str] = []
 
-    def push(name: str):
+    def push(name: str, allow_path: bool = False):
         n = str(name or "").strip()
         if not n:
             return
-        if n.startswith("-") or n.startswith("./") or "/" in n:
+        if n.startswith("-") or n.startswith("./"):
+            return
+        if "/" in n and not allow_path and not n.startswith("@"):
             return
         candidates.append(n)
 
-    head = tokens[0]
-    if head in ("npx", "pnpm", "yarn", "bunx", "npm"):
-        if head == "pnpm" and len(tokens) >= 3 and tokens[1] == "dlx":
-            push(tokens[2])
-        elif head == "yarn" and len(tokens) >= 3 and tokens[1] == "dlx":
-            push(tokens[2])
-        elif head == "npm" and len(tokens) >= 3 and tokens[1] in ("exec", "x"):
-            push(tokens[2])
-        elif head == "npx" and len(tokens) >= 2:
-            push(tokens[1])
-        elif head == "bunx" and len(tokens) >= 2:
-            push(tokens[1])
+    # Install/exec command parsing catches explicit package names.
+    for raw in _collect_install_tokens(tokens):
+        for repo_name in _extract_repo_candidates(raw):
+            # Keep both full slug and repo basename for better matching.
+            push(repo_name, allow_path=True)
+        normalized = _normalize_package_candidate(raw)
+        if normalized:
+            push(normalized)
 
     # Also consider the command itself as a candidate binary.
+    head = tokens[0]
     push(head)
 
     out: List[str] = []
@@ -1261,7 +1407,7 @@ def _extract_candidate_names(command: str) -> List[str]:
             continue
         seen.add(c)
         out.append(c)
-    return out[:3]
+    return out[:8]
 
 
 def _local_node_bin_evidence(name: str, cwd: str) -> Optional[dict]:

@@ -168,7 +168,7 @@ The TUI now starts in a review queue mode so pending approvals stay front and ce
 
 Key review actions:
 - `w` add an **always-allow** policy pattern (guided, with risk text)
-- `s` skip exact command (don’t flag this exact command again)
+- `s` **don’t flag exact** command (same command will no longer prompt)
 - `b` add a block pattern
 - `d` discuss selected item in embedded chat
 - `x` disable/enable Deliberate globally

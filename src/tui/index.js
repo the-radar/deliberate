@@ -113,14 +113,37 @@ function extractCommandBase(value) {
   return segments[segments.length - 1] || first;
 }
 
+function decisionOf(event) {
+  const raw = String(event?.data?.permissionDecision || '');
+  if (raw === 'ask' || raw === 'allow' || raw === 'block') return raw;
+  return '';
+}
+
+function decisionLabel(event) {
+  const type = String(event?.type || '');
+  if (type === 'command_analysis_progress') return 'analyzing';
+  if (type === 'command_post_analysis') return 'executed';
+  if (type === 'policy_update') return 'policy';
+
+  const decision = decisionOf(event);
+  if (decision === 'ask') return 'needs approval';
+  if (decision === 'allow') return 'allowed';
+  if (decision === 'block') return 'blocked';
+  return 'event';
+}
+
 function titleOf(event) {
   const type = String(event?.type || '');
   if (type === 'command_analyzed') {
     const cmd = typeof event?.data?.command === 'string' ? event.data.command : '(command)';
-    const decision = String(event?.data?.permissionDecision || '');
+    const decision = decisionOf(event);
     if (decision === 'ask') return `Needs approval: ${cmd}`;
     if (decision === 'block') return `Blocked: ${cmd}`;
-    if (decision === 'allow') return `Allowed: ${cmd}`;
+    if (decision === 'allow') {
+      const pattern = String(event?.data?.autoApproval?.pattern || '').trim();
+      if (pattern) return `Allowed by policy (${pattern}): ${cmd}`;
+      return `Allowed: ${cmd}`;
+    }
     return cmd;
   }
   if (type === 'command_post_analysis') {
@@ -145,9 +168,10 @@ function titleOf(event) {
 
 function summarizeEvent(event, width = 80) {
   const clock = formatClock(event?.timestamp);
+  const status = decisionLabel(event);
   const risk = riskOf(event);
-  const label = risk === 'DANGEROUS' ? 'D' : risk === 'SAFE' ? 'S' : 'M';
-  const prefix = `${clock} [${label}] `;
+  const riskLabel = risk === 'DANGEROUS' ? 'danger' : risk === 'SAFE' ? 'safe' : 'mod';
+  const prefix = `${clock} ${status} ${riskLabel} · `;
   return `${prefix}${truncate(titleOf(event), Math.max(10, width - prefix.length))}`;
 }
 
@@ -163,19 +187,27 @@ function detailsForEvent(event) {
   if (!event) return 'No selection.';
 
   const lines = [];
-  lines.push(`type: ${event.type || ''}`);
-  lines.push(`time: ${event.timestamp || ''}`);
-  lines.push(`session: ${event.sessionId || ''}`);
-  lines.push(`risk: ${riskOf(event)}`);
+  const type = String(event?.type || '');
+  const data = event?.data || {};
+  const risk = riskOf(event);
+  const decision = decisionOf(event);
 
-  const data = event.data || {};
-  if (typeof data.permissionDecision === 'string' && data.permissionDecision) {
-    lines.push(`decision: ${data.permissionDecision}`);
+  lines.push(`review status: ${decisionLabel(event)}`);
+  lines.push(`risk: ${risk}`);
+  lines.push(`time: ${String(event?.timestamp || '')}`);
+  lines.push(`session: ${String(event?.sessionId || '')}`);
+  lines.push(`event type: ${type}`);
+
+  if (decision) {
+    lines.push(`decision: ${decision}`);
   }
-  if (event.type === 'command_analysis_progress') {
+
+  if (decision === 'ask') {
     lines.push('');
-    lines.push(`stage: ${String(data.stage || '')}`);
-    lines.push(`message: ${String(data.message || '')}`);
+    lines.push('what to do now:');
+    lines.push('- Review command, explanation, and evidence below.');
+    lines.push('- Approve or deny in Claude Code prompt.');
+    lines.push('- Use "d" to discuss, "w" for guided always-allow, "b" to block pattern.');
   }
 
   if (typeof data.command === 'string') {
@@ -192,26 +224,59 @@ function detailsForEvent(event) {
 
   if (typeof data.explanation === 'string' && data.explanation.trim()) {
     lines.push('');
-    lines.push('explanation:');
+    lines.push('why Deliberate flagged this:');
     lines.push(data.explanation.trim());
   }
 
-  if (data.autoApproval && typeof data.autoApproval === 'object') {
+  if (type === 'command_analysis_progress') {
     lines.push('');
-    lines.push('autoApproval:');
-    lines.push(prettyJson(data.autoApproval));
+    lines.push(`analysis stage: ${String(data.stage || '')}`);
+    lines.push(`progress: ${String(data.message || '')}`);
+  }
+
+  if (data.autoApproval && typeof data.autoApproval === 'object') {
+    const pattern = String(data.autoApproval.pattern || '').trim();
+    lines.push('');
+    lines.push('policy reason:');
+    if (pattern) {
+      lines.push(`Auto-approved by pattern: ${pattern}`);
+    } else {
+      lines.push('Auto-approved by policy pattern.');
+    }
   }
 
   if (Array.isArray(data.evidence) && data.evidence.length) {
     lines.push('');
     lines.push('evidence:');
-    lines.push(prettyJson(data.evidence));
+    data.evidence.slice(0, 8).forEach((item, idx) => {
+      const source = String(item?.source || 'source');
+      const name = String(item?.name || 'unknown');
+      const version = item?.version ? `@${item.version}` : '';
+      const url = item?.url ? ` (${item.url})` : '';
+      lines.push(`${idx + 1}. ${source}: ${name}${version}${url}`);
+    });
+    if (data.evidence.length > 8) {
+      lines.push(`... +${data.evidence.length - 8} more evidence items`);
+    }
   }
 
   if (data.consequences) {
     lines.push('');
     lines.push('consequences:');
-    lines.push(prettyJson(data.consequences));
+    const files = Array.isArray(data.consequences.files) ? data.consequences.files : [];
+    const dirs = Array.isArray(data.consequences.dirs) ? data.consequences.dirs : [];
+    if (typeof data.consequences.warning === 'string' && data.consequences.warning.trim()) {
+      lines.push(data.consequences.warning.trim());
+    }
+    if (files.length) {
+      lines.push(`Files impacted (${files.length}): ${files.slice(0, 10).join(', ')}`);
+    }
+    if (dirs.length) {
+      lines.push(`Directories impacted (${dirs.length}): ${dirs.slice(0, 10).join(', ')}`);
+    }
+    if (!files.length && !dirs.length && !String(data.consequences.warning || '').trim()) {
+      lines.push(prettyJson(data.consequences));
+    }
   }
 
   if (Array.isArray(data.workflowPatterns) && data.workflowPatterns.length) {
@@ -228,7 +293,7 @@ function detailsForEvent(event) {
   if (event.type === 'policy_update') {
     if (typeof data.guidance === 'string' && data.guidance.trim()) {
       lines.push('');
-      lines.push('guidance:');
+      lines.push('guidance captured for audit:');
       lines.push(data.guidance.trim());
     }
     if (typeof data.note === 'string' && data.note.trim()) {
@@ -529,7 +594,7 @@ export async function runTui(options = {}) {
     'a all',
     'n next session',
     'f follow',
-    's skip exact',
+    's don\'t flag exact',
     'w always allow',
     'b block',
     'd discuss',
@@ -724,7 +789,7 @@ export async function runTui(options = {}) {
         action: 'skip_exact_command',
         pattern: command
       });
-      setStatus('saved: skip exact command');
+      setStatus('saved: don\'t flag exact command');
     } catch {
       setStatus('skip failed');
     }
@@ -926,11 +991,14 @@ export async function runTui(options = {}) {
     streamingAbort = controller;
     const policyPrompt = [
       'I want to configure an always-allow rule for this shell command.',
+      'Please coach a cautious user.',
       'Give a short risk summary and suggest least-privileged pattern options.',
+      'If the command can touch network destinations, suggest destination-level constraints.',
       'Format as plain text with these headings:',
       'Risk summary',
       'Recommended rule',
-      'If you need broader scope'
+      'Optional broader rule (with warning)',
+      'Questions to confirm before saving'
     ].join('\n');
 
     streamChat({

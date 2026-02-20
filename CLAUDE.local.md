@@ -49,28 +49,33 @@ Pivot Deliberate v2 UX to a terminal-native TUI + split-pane workflow (WezTerm-f
   - Guided “always allow” policy flow in TUI with embedded chat guidance and explicit confirmation
   - Hook-level `deliberate.autoApprove.patterns` support with preserved audit trail metadata
   - Scoped web evidence cache per session to reduce repeated network lookups
+  - Better web evidence extraction for install/git references (`npm install`, `pip install`, GitHub/GitLab URLs)
+  - Review UX copy updates in TUI (human-first status text, clearer reasons, structured evidence/consequences display)
+  - Added focused tests:
+    - `hooks/tests/test_deliberate_commands.py`
+    - `test/config-defaults.test.mjs`
 
 ### Now:
-- Final validation sweep (targeted tests + full suite behavior) and release-ready documentation pass.
+- Final docs/continuity pass and commit.
 
 ### Next:
-- Decide release packaging for GUI vs TUI (binary distribution and how users should choose UI mode by environment).
+- Reinstall/verify in local hook environment, then run user-side workflow validation.
 
 ## Open Questions:
 - None for core v2 implementation. Remaining work is polish and release flow decisions (GUI binary distribution, signing).
 
 ## Working Set (files/ids/commands):
-- `/Users/bobola/Documents/deliberate/CLAUDE.local.md`
-- `/Users/bobola/.claude/plans/mossy-meandering-hoare.md`
-- `/Users/bobola/Documents/deliberate/WORK/2026-02-07_tui-pane-pivot_WORKFILE.md`
-- `/Users/bobola/Documents/deliberate/src/ws-broadcaster.js`
-- `/Users/bobola/Documents/deliberate/src/server.js`
-- `/Users/bobola/Documents/deliberate/hooks/deliberate-commands.py`
-- `/Users/bobola/Documents/deliberate/hooks/deliberate-commands-post.py`
-- `/Users/bobola/Documents/deliberate/hooks/deliberate-changes.py`
-- `/Users/bobola/Documents/deliberate/test/ws-broadcaster.test.mjs`
-- `/Users/bobola/Documents/deliberate/WORK/COMPLETED_2026-02-06_v2-sprint1-websocket-infra_WORKFILE.md`
-- `/Users/bobola/Documents/deliberate/WORK/2026-02-06_v2-sprint2-5-gui-and-chat_WORKFILE.md`
+- `/Users/h4tch1ing/Documents/deliberate/CLAUDE.local.md`
+- `/Users/h4tch1ing/Documents/deliberate/CONTINUITY.md`
+- `/Users/h4tch1ing/Documents/deliberate/WORK/2026-02-20_full-v2-experience_WORKFILE.md`
+- `/Users/h4tch1ing/Documents/deliberate/hooks/deliberate-commands.py`
+- `/Users/h4tch1ing/Documents/deliberate/hooks/tests/test_deliberate_commands.py`
+- `/Users/h4tch1ing/Documents/deliberate/src/tui/index.js`
+- `/Users/h4tch1ing/Documents/deliberate/src/config.js`
+- `/Users/h4tch1ing/Documents/deliberate/test/config-defaults.test.mjs`
+- `python3 -m py_compile hooks/deliberate-commands.py hooks/deliberate-commands-post.py hooks/deliberate-session-start.py hooks/deliberate-changes.py`
+- `python3 -m unittest hooks.tests.test_deliberate_commands -v`
+- `node --test --test-concurrency=1 test/config-defaults.test.mjs test/config-chat-api.test.mjs test/event-log.test.mjs test/chat-client.test.mjs test/ws-broadcaster.test.mjs`
 
 ## Project Ammo (.ammo/)
 - none yet

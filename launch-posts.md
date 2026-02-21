@@ -1,21 +1,23 @@
-# Launch Posts for Deliberate v1.0.5
+# Launch Posts for Deliberate (Review-First UX)
 
 ## LinkedIn
 
-**Headline:** AI agents need guardrails. Now yours have them—everywhere.
+**Headline:** AI coding feels better when review is clear, fast, and human.
 
-We just released **Deliberate v1.0.5**, expanding our AI safety layer to support **Antigravity** and **Google's Gemini CLI**.
+We rebuilt **Deliberate** around one job:
+give you high-signal review moments before risky actions run.
 
-If you're using AI agents to write code, you know the anxiety of watching them execute shell commands. One wrong `rm -rf` or `git reset` can cost hours of work.
+If you use Claude Code/OpenCode style workflows, you know how easy it is to approve commands too quickly.
 
-Deliberate solves this by intercepting commands *before* they run. It uses a local ML model to classify risk and explains exactly what will happen in plain English.
+Deliberate now focuses on:
+✅ plain-language explanations
+✅ explicit human approval moments
+✅ per-session timeline and audit trail
+✅ policy controls when you want less friction
 
-**What's new in v1.0.5:**
-✅ **Antigravity Support:** Full integration with `PreToolUse` hooks to block dangerous commands.
-✅ **Gemini CLI Support:** Native hooks for Google's agentic CLI.
-✅ **Robust Installation:** Improved model setup that works even on restricted networks.
+No opaque “trust me” layer. Just clear context and deliberate decisions.
 
-It now protects you across the entire ecosystem:
+It works across:
 - Claude Code
 - OpenCode
 - Antigravity
@@ -28,7 +30,7 @@ npm install -g deliberate
 deliberate install
 ```
 
-Source available on GitHub: https://github.com/the-radar/deliberate
+Source available on GitHub: [https://github.com/the-radar/deliberate](https://github.com/the-radar/deliberate)
 
 #AI #DevTools #SoftwareEngineering #Antigravity #Gemini #ClaudeCode
 
@@ -36,40 +38,31 @@ Source available on GitHub: https://github.com/the-radar/deliberate
 
 ## Twitter / X Thread
 
-1/5
-🚨 **Deliberate v1.0.5 is live!**
+1/5  
+Deliberate is now a **review-first companion** for AI coding workflows.
 
-Now protecting your **Antigravity** and **Gemini CLI** sessions.
+The goal is simple: help you decide with confidence before commands run.
 
-The safety layer for AI coding agents just got bigger. 🛡️
+[https://github.com/the-radar/deliberate](https://github.com/the-radar/deliberate)
 
-https://github.com/the-radar/deliberate
+2/5  
+We now optimize for the nervous moment:
+- “What is this command really doing?”
+- “Is this reversible?”
+- “Should I allow this once, always, or never?”
 
-2/5
-**Antigravity Support** ⚡
-Deliberate now hooks directly into Antigravity's `PreToolUse` event.
+3/5  
+What you get:
+- plain-language explanations
+- explicit approval options
+- session timeline with paper trail
+- policy controls to reduce repeated prompts
 
-Every bash command is analyzed before it runs.
-- 🚨 Dangerous? You get a warning.
-- ✅ Safe? It runs instantly.
+4/5  
+Deliberate is not about stifling power users.
+It keeps speed, but makes risky decisions visible and intentional.
 
-No more accidental `rm -rf` or git disasters.
-
-3/5
-**Gemini CLI Support** ♊
-Using Google's new agentic CLI? We've got you covered.
-
-Deliberate intercepts commands and tracks file changes, giving you full visibility into what the agent is doing—before it's too late.
-
-4/5
-**One Safety Layer, Any Agent** 🔒
-Whether you use Claude Code, OpenCode, Antigravity, or Gemini, Deliberate provides consistent, ML-powered safety checks.
-
-- Local execution (privacy first)
-- Semantic analysis (catches obfuscated attacks)
-- Human-readable explanations
-
-5/5
+5/5  
 Try it now:
 
 ```bash
@@ -77,8 +70,8 @@ npm install -g deliberate
 deliberate install
 ```
 
-It automatically detects and configures your installed agents.
+It detects and configures installed agent CLIs automatically.
 
-Star the repo: https://github.com/the-radar/deliberate
+Star the repo: [https://github.com/the-radar/deliberate](https://github.com/the-radar/deliberate)
 
 #AI #CodingAgents #DevTools #Security

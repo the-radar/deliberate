@@ -1,31 +1,78 @@
-# Deliberate Marketing Plan (Post-Release)
+# Deliberate Marketing Plan (Review-First Positioning)
 
-This plan assumes v1.0.3 is already live and focuses on a fast, credible adoption push. The primary success metric for the next 30 days is NPM downloads, with GitHub stars as secondary social proof. We will operate under the Greymata persona on X and post only from the company page on LinkedIn. The voice is “we,” not “I.”
+This plan reflects Deliberate’s current product truth: UX and explainability first, security as a sidecar. The goal is trust and adoption, not fear-only messaging.
 
 ## Positioning
 
-Deliberate is the seatbelt for agentic coding. The core message is that a “human in the loop” is not enough once agents can execute shell commands. The product prevents catastrophic mistakes and creates an automatic safety net before destructive actions are allowed. We will run two angles in parallel: concrete fear stories about repo wipes and data loss, and empowerment framing around workflow-aware safety and automatic backups. Both angles lead to the same CTA: install the tool and get protected immediately.
+Deliberate is a review companion for agentic coding sessions. It creates clear human checkpoints before risky actions, explains intent in plain language, and leaves a usable audit trail. The core promise is confidence, not lock-down.
 
-## Distribution Strategy
+Primary message:
+- “Know what your agent is about to do, and why, before you approve.”
 
-The first owned channel will be a landing page at `the-radar.net/tools/deliberate`. Every external post should route to that page or the GitHub README, but the page should become the long-term hub. Its job is to convert attention into installations and a future Cloud waitlist. The rented channels will be X and LinkedIn. X is the primary driver for developer adoption and conversation. LinkedIn is the credibility anchor on a slower cadence, and because persona accounts are risky, all LinkedIn posts will be published from the company page only. Borrowed distribution comes from small, high-trust developer communities and short outreach to devtools writers and security-minded engineers.
+Supporting message:
+- “Keep speed, add clear review moments.”
 
-## Content Cadence (First 30 Days)
+## Target users
 
-We will run a steady cadence and keep feedback loops short. Week 1 focuses on the core launch narrative and proof of value: publish the GitHub release, ship a short terminal demo GIF, and post one concise thread on X plus one LinkedIn post. The job in Week 1 is to make the tool feel real and useful in under 30 seconds. Weeks 2–3 shift to momentum with two short X updates per week and one longer post that includes a screenshot or short clip. LinkedIn stays at one post per week, strictly from the company page. During this stretch we also collect small user quotes and war stories. Week 4 consolidates with a short “what we learned” post, a usage highlight, and a soft teaser for Cloud with a simple waitlist form.
+1. Individual developers who feel uneasy approving shell commands quickly.
+2. Team leads who need oversight across many sessions and a paper trail.
 
-## Demo Asset
+## Distribution strategy
 
-The most important visual is a terminal flow that shows the problem and the save. The arc is simple: an agent tries `rm -rf src`, Deliberate warns and shows what will be lost, a backup path is created, and the user blocks the command. This asset will appear on X, the landing page, and the GitHub release.
+Owned channel:
+- Landing page at `the-radar.net/tools/deliberate` focused on “review-first AI coding.”
 
-## Interview Script (for User Quotes)
+Rented channels:
+- X for fast feedback and feature clips.
+- LinkedIn company page for trust and team-lead narratives.
 
-Keep the interview short and structured. We are looking for one-paragraph quotes that can be used in posts and on the landing page. Ask what destructive command they last saw, what they wished a safety layer had done, what would make them install Deliberate, and what feels safer or faster after trying it. Target 5–8 interviews; two strong quotes are enough to start.
+Borrowed channels:
+- Devtools communities where Claude Code/OpenCode workflows are discussed.
 
-## Metrics and Reporting
+## Content cadence (30 days)
 
-Primary is NPM downloads. Secondary is GitHub stars. We will track weekly deltas and align messaging to the posts that correlate with the biggest download spikes.
+Week 1:
+- Announce “review-first” product direction.
+- Publish one terminal walkthrough clip with explicit approval moments.
 
-## Next Actions
+Weeks 2–3:
+- Two short X posts weekly: one UX feature, one user workflow.
+- One LinkedIn post weekly: team oversight, auditability, policy stories.
 
-Publish the landing page under `the-radar.net/tools/deliberate` with a simple install CTA and a short waitlist form for Cloud. Record the terminal demo, and post the first X thread and LinkedIn announcement within 48 hours. After that, iterate based on response and tighten the story around the strongest angle.
+Week 4:
+- “What we learned from real sessions” post.
+- Publish top UX changes made from user feedback.
+
+## Demo asset
+
+Primary demo should show:
+1) command arrives,
+2) Deliberate explains it,
+3) user gets clear action choices,
+4) decision is logged for later review.
+
+Use a TUI pane recording, not detached GUI footage, to match real usage context.
+
+## Interview script (quotes)
+
+Ask:
+- “Which command type makes you hesitate most?”
+- “What explanation makes you comfortable approving?”
+- “What should be remembered in audit history?”
+- “How much friction is acceptable for high-risk actions?”
+
+## Metrics
+
+Primary:
+- npm installs
+- weekly active Deliberate sessions
+
+Secondary:
+- GitHub stars
+- percentage of reviewed decisions with explicit action taken (approve/deny/policy)
+
+## Next actions
+
+1. Update landing copy to “review-first explainability.”
+2. Replace old “ML classifier” language in social assets.
+3. Publish refreshed launch thread and LinkedIn post.

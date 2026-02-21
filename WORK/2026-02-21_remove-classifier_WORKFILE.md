@@ -21,6 +21,7 @@ Required outcome:
 - [x] Remove classifier package/dependency surface (`src/classifier`, package deps/files).
 - [x] Remove classifier training assets (`training/`) to eliminate dead maintenance surface.
 - [x] Update README and status/install text to reflect UX-first architecture.
+- [x] Refresh marketing collateral to remove classifier-centric messaging (`docs/marketing-plan.md`, `launch-posts.md`, `docs/compare-safety-net.md`).
 - [x] Run syntax/build checks and full tests.
 - [x] Commit with clean, human message.
 

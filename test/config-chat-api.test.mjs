@@ -49,6 +49,11 @@ test('config endpoints read + mutate config file', async () => {
 
   try {
     const base = `http://localhost:${port}`;
+    const statusRes = await fetch(`${base}/status`);
+    assert.equal(statusRes.status, 200);
+    const status = await statusRes.json();
+    assert.equal(status.mode, 'ux-explainability');
+
     const cfgRes = await fetch(`${base}/api/config`);
     assert.equal(cfgRes.status, 200);
     const cfg = await cfgRes.json();

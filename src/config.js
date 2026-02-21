@@ -62,13 +62,9 @@ const DEFAULT_CONFIG = {
     baseUrl: null,   // Custom URL (e.g., Ollama endpoint)
     model: null      // Model to use
   },
-  classifier: {
-    serverPort: 8765,
-    enabled: true
-  },
-  blocking: {
-    enabled: false,  // When true, auto-block high-confidence DANGEROUS operations
-    confidenceThreshold: 0.85  // Block if DANGEROUS + confidence > this threshold
+  // Local Deliberate server for broadcast/config/chat transport.
+  server: {
+    port: 8765
   },
   deduplication: {
     enabled: true  // When true, don't show same warning twice per session
@@ -370,30 +366,6 @@ export function getGuiConfig() {
   return deepMerge(DEFAULT_CONFIG.gui, config.gui || {});
 }
 
-/**
- * Get blocking configuration
- * @returns {Object} { enabled: boolean, confidenceThreshold: number }
- */
-export function getBlockingConfig() {
-  const config = loadConfig();
-  return config.blocking || DEFAULT_CONFIG.blocking;
-}
-
-/**
- * Set blocking configuration
- * @param {boolean} enabled - Whether auto-blocking is enabled
- * @param {number} confidenceThreshold - Threshold for auto-blocking (0-1)
- */
-export function setBlockingConfig(enabled, confidenceThreshold = 0.85) {
-  const config = loadConfig();
-  config.blocking = {
-    enabled: !!enabled,
-    confidenceThreshold: Math.max(0, Math.min(1, confidenceThreshold))
-  };
-  saveConfig(config);
-  return config.blocking;
-}
-
 export default {
   loadConfig,
   saveConfig,
@@ -407,7 +379,5 @@ export default {
   getConfigDir,
   getConfigFile,
   getGuiConfig,
-  getBlockingConfig,
-  setBlockingConfig,
   LLM_PROVIDERS
 };

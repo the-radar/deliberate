@@ -49,11 +49,11 @@ function buildSystemPrompt(context) {
   }
   if (context.risk) {
     parts.push('');
-    parts.push(`Classifier risk: ${context.risk}`);
+    parts.push(`Assessed risk: ${context.risk}`);
   }
   if (context.explanation) {
     parts.push('');
-    parts.push('Classifier explanation:');
+    parts.push('Current explanation:');
     parts.push(context.explanation);
   }
   if (context.consequences) {

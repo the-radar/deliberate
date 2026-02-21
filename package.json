@@ -1,7 +1,7 @@
 {
   "name": "deliberate",
   "version": "1.0.5",
-  "description": "Safety layer for agentic coding tools - classifies shell commands before execution",
+  "description": "Review-first explainability companion for agentic coding workflows",
   "type": "module",
   "bin": {
     "deliberate": "./bin/cli.js"
@@ -15,12 +15,6 @@
     "opencode/",
     "antigravity/",
     "gemini/",
-    "training/build_classifier.py",
-    "training/expanded-command-safety.jsonl",
-    "models/classifier_base.pkl",
-    "models/malicious_embeddings.json",
-    "models/training_metadata.json",
-    "models/similarity_thresholds.json",
     "README.md"
   ],
   "scripts": {
@@ -34,7 +28,6 @@
     "gui:check": "npm --prefix gui run check"
   },
   "dependencies": {
-    "@huggingface/transformers": "^3.0.0",
     "blessed": "^0.1.81",
     "commander": "^12.0.0",
     "express": "^4.18.0",

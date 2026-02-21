@@ -1,5 +1,5 @@
 {
-  "description": "Deliberate safety layer - classifies commands and file changes before execution",
+  "description": "Deliberate review-first hook layer for command and file-change explainability",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/explain-command.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/deliberate-commands.py\"",
             "timeout": 35
           }
         ]
@@ -15,12 +15,34 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/explain-changes.py\"",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/deliberate-commands-post.py\"",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/deliberate-changes.py\"",
             "timeout": 35
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/deliberate-session-start.py\"",
+            "timeout": 5
           }
         ]
       }

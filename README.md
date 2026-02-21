@@ -1,108 +1,37 @@
 # Deliberate
 
-A safety layer for AI coding agents.
+A review-first safety companion for AI coding agents.
 
-## The Problem
+## Why Deliberate
 
-AI agents have access to your shell. They can run any command. Delete files. Exfiltrate credentials. Open reverse shells. The only guardrail: a yes/no prompt you'll inevitably approve on autopilot.
+Agent prompts can move fast. The dangerous part is not always one command, it is a stream of commands you approve on autopilot. Deliberate is built to slow that moment down in a useful way.
 
-## The Solution
+The product value is clear and explicit:
+- human review moments before execution
+- plain-language explanations
+- visible evidence and consequences
+- durable audit trail in a terminal-native workflow
 
-Deliberate forces you to be deliberate. Every command gets classified and explained before execution:
+Security is the sidecar, not the product tax.
 
-```
-[Bash] rm -rf node_modules
-🚨 [DANGEROUS] Recursively deletes the node_modules directory and all contents.
-> Allow? [y/n]
-```
+## What Deliberate does
 
-The analysis persists after execution—no more vanishing prompts:
+For command execution and file changes, Deliberate:
+- analyzes intent with lightweight local rules plus LLM explanation
+- shows risk as SAFE, MODERATE, or DANGEROUS
+- highlights workflow-level risk patterns across session history
+- previews destructive consequences when possible
+- stores timeline/audit events locally for later review
 
-```
-🚨 DELIBERATE [DANGEROUS]
-    Recursively deletes the node_modules directory and all contents.
-```
+The experience is centered on approvals and explainability, not opaque model scoring.
 
-Three risk levels:
-- ✅ **SAFE** — Read-only, no system changes
-- ⚡ **MODERATE** — Modifies files or services, reversible
-- 🚨 **DANGEROUS** — Destructive, credential access, network exfiltration
+## How it works
 
-Every command shows its analysis. You decide with context, not blind trust.
-
-## How It Works
-
-Four layers, each serving a purpose:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Layer 1: Pattern Matcher                                   │
-│           Regex rules. Deterministic. Can't be bypassed     │
-│           by prompt injection.                              │
-├─────────────────────────────────────────────────────────────┤
-│  Layer 2: ML Classifier                                     │
-│           Semantic embeddings via CmdCaliper. Trained on    │
-│           712 labeled commands. Catches novel attacks.      │
-├─────────────────────────────────────────────────────────────┤
-│  Layer 3: LLM Explainer                                     │
-│           Human-readable explanations. Uses your            │
-│           configured provider (Claude, Ollama, etc).        │
-├─────────────────────────────────────────────────────────────┤
-│  Layer 4: Catch-All Backup                                  │
-│           Automatic backup before ANY destructive command.  │
-│           Files recoverable even if you approve by mistake. │
-└─────────────────────────────────────────────────────────────┘
-```
-
-The AI agent can't explain away its own commands—the classifier runs independently.
-
-## Workflow Detection
-
-Individual commands can look safe while the sequence is catastrophic. Deliberate tracks command history within sessions and detects dangerous patterns:
-
-| Pattern | What It Detects |
-|---------|-----------------|
-| REPO_WIPE | rm + git rm + force push |
-| MASS_DELETE | 3+ rm commands in sequence |
-| HISTORY_REWRITE | git reset --hard + force push |
-| TEMP_SWAP | copy to temp, delete original, copy back |
-
-When a pattern is detected, you see the full context—not just the current command.
-
-## Consequence Visualization
-
-Before destructive commands run, you see exactly what will be affected:
-
-```
-⚠️  WILL DELETE: 17 files, 2 directories (2,847 lines of code) [156.3 KB]
-    Files:
-      - src/ai/deliberate-ai.ts
-      - src/core/classification/classifier.ts
-      - src/cli/commands.ts
-      ... and 14 more
-```
-
-Supported commands:
-- `rm` / `git rm` — shows files and line counts
-- `git reset --hard` — shows uncommitted changes that will be discarded
-- `git clean` — shows untracked files that will be deleted
-- `git checkout --` — shows modified files that will revert
-- `git stash drop` — shows stash contents that will be lost
-
-## Automatic Backups
-
-Every destructive command triggers an automatic backup before execution:
-
-```
-~/.deliberate/backups/
-  └── my-project/
-      └── 20250114_120000/
-          ├── metadata.json    # Command, paths, restore info
-          ├── files/           # Backed up files (original structure)
-          └── git_state/       # Branch, commit, uncommitted diff
-```
-
-Files are recoverable even if you approve a destructive command by mistake. The `metadata.json` includes file mappings for exact restore to original locations.
+Deliberate uses a simple architecture:
+1. Local rule pre-assessment for fast risk hints.
+2. LLM-generated explanation for human-readable review context.
+3. Workflow and consequence tracking for "what happens if I run this".
+4. Policy controls (don’t flag, block pattern, always-allow pattern) with audit events.
 
 ## Installation
 
@@ -112,70 +41,72 @@ deliberate install
 ```
 
 The installer configures:
-- **Claude Code:** Adds hooks to `~/.claude/settings.json`.
-- **OpenCode:** Installs plugins to `~/.config/opencode/plugins/` and registers them in `~/.config/opencode/opencode.json`.
-- **Antigravity:** Adds hooks to `~/.antigravity/hooks/` and updates `settings.json`.
-- **Gemini:** Adds hooks to `~/.gemini/hooks/` and updates `settings.json`.
-- **LLM:** Sets up your provider (Claude, Anthropic API, or Ollama) for explanations.
+- Claude Code hooks in `~/.claude/settings.json`
+- OpenCode plugins in `~/.config/opencode/plugins/`
+- Antigravity hooks in `~/.antigravity/hooks/`
+- Gemini hooks in `~/.gemini/hooks/`
+- Optional LLM provider setup for richer explanations
 
 ### Dependencies
 
-**Python 3.9+** is required. The installer auto-installs `sentence-transformers`, `scikit-learn`, and `numpy`. The CmdCaliper embedding model (~419MB) downloads on first use.
+- Node.js 18+
+- Python 3.9+
 
 ## CLI
 
 ```bash
-deliberate install          # Install Claude Code hooks + OpenCode plugin, configure LLM
-deliberate status           # Check installation
-deliberate classify "rm -rf /"   # Test classification → DANGEROUS
-deliberate serve            # Start classifier server (faster)
+deliberate install          # Install hooks/plugins and configure LLM
+deliberate status           # Check installation state
+deliberate serve            # Start local Deliberate server (events/chat/config)
 deliberate pane             # Open Deliberate TUI in a split pane (WezTerm/tmux)
-deliberate tui              # Run Deliberate TUI in the current terminal
-deliberate gui              # Launch the desktop GUI (optional, for IDE harness work)
+deliberate tui              # Run Deliberate TUI in current terminal
+deliberate gui              # Launch optional desktop GUI
 ```
 
-## Deliberate pane (TUI, recommended for Claude Code/OpenCode)
+## Deliberate pane (TUI, recommended)
 
-Deliberate v2 is moving toward a terminal-native workflow. The TUI is designed to live in a side pane while your agent session runs on the left.
+The TUI is designed for Claude Code/OpenCode side-pane workflows.
 
-It reads a local JSONL event log written by the hooks, so you still get history even if you start the pane after a session begins.
+It reads local JSONL event logs (`~/.deliberate/events/`) so you keep history even if the pane starts late.
 
-In one terminal:
+Typical workflow:
 
 ```bash
 deliberate serve
-```
-
-Then open the pane:
-
-```bash
 deliberate pane
 ```
 
-If you are not in a supported terminal pane manager, you can still run it in the current terminal:
+If split-pane features are not available:
 
 ```bash
 deliberate tui
 ```
 
-To reduce terminal noise, set `gui.terminalExplanations` in `~/.deliberate/config.json` to `"minimal"` (or `"gui"`). The hooks will keep the permission gate visible, but point you to the pane for details.
+## Review-first UX
 
-Embedded chat works in the TUI. If you do not have keys configured, chat replies in mock mode.
+The TUI opens in **review queue** mode by default so pending approvals stay front and center.
 
-Deliberate also does a scoped “web search” for unknown commands/packages (npm registry, PyPI, GitHub, GitLab) and shows the evidence in the pane/TUI to support approvals.
-
-The TUI now starts in a review queue mode so pending approvals stay front and center. Press `v` to switch between review queue and full history.
-
-Key review actions:
-- `w` add an **always-allow** policy pattern (guided, with risk text)
-- `s` **don’t flag exact** command (same command will no longer prompt)
-- `b` add a block pattern
+- `v` toggle review queue/history
 - `d` discuss selected item in embedded chat
+- `s` don’t flag exact command
+- `b` block command pattern
+- `w` guided always-allow policy flow
 - `x` disable/enable Deliberate globally
 
-### Auto-open pane on Claude Code SessionStart
+## Scoped evidence lookups
 
-If you install Deliberate hooks, a Deliberate pane can auto-open at Claude Code session start (one pane per session) and auto-start the local server. This is controlled by:
+For unknown commands/packages Deliberate gathers bounded evidence from:
+- npm registry
+- PyPI JSON API
+- GitHub repository search
+- GitLab project search
+- local `node_modules/.bin` resolution when available
+
+This evidence is shown in the pane and attached to approval context.
+
+## Auto-open pane on SessionStart
+
+When hooks are installed, Deliberate can auto-open one pane per Claude Code session and auto-start the local server:
 
 ```json
 {
@@ -183,100 +114,30 @@ If you install Deliberate hooks, a Deliberate pane can auto-open at Claude Code 
 }
 ```
 
-### Disable / enable Deliberate (quick toggle)
+## Policy model
 
-In the TUI, press `x` to toggle Deliberate on/off. When off, hooks fail-open and produce no output until you re-enable it.
+Deliberate supports explicit always-allow patterns in:
+`~/.deliberate/config.json` under `deliberate.autoApprove.patterns`.
 
-### Auto-approve patterns ("always allow")
+Matching commands are still analyzed and logged. Deliberate only auto-applies the policy when the command is not currently assessed as dangerous.
 
-Deliberate supports explicit policy patterns at `deliberate.autoApprove.patterns` in `~/.deliberate/config.json`. Matching commands still get analyzed and logged, but they skip interactive approval prompts unless they hit a hard dangerous auto-block.
+## GUI note
 
-## Deliberate GUI (Desktop, optional)
+The desktop GUI remains in-repo for future IDE/Antigravity harness workflows. For Claude Code/OpenCode, the TUI pane is the primary experience.
 
-The desktop GUI is a Tauri app that shows hook output in a floating window. It is kept for future IDE/Antigravity harnesses and is not the recommended UX for Claude Code/OpenCode.
+## Integrations
 
-From the repo checkout:
+### OpenCode
+- command safety hook behavior
+- file change summaries
 
-```bash
-npm run gui:install
-npm run gui:build
-deliberate gui
-```
+### Antigravity
+- PreToolUse command analysis
+- PostToolUse file-change summaries
 
-If macOS blocks the app the first time you run it, the usual workaround is:
-
-```bash
-xattr -cr /path/to/Deliberate.app
-```
-
-## Training
-
-The classifier ships with 481 labeled examples: reverse shells, credential theft, cloud operations, container escapes, privilege escalation, and safe workflows.
-
-### Add Your Own
-
-```bash
-# Add to training/expanded-command-safety.jsonl
-{"command": "...", "label": "DANGEROUS", "category": "..."}
-
-# Retrain
-python training/build_classifier.py --model base
-```
-
-### Active Learning
-
-Uncertain classifications get logged. Review and approve them:
-
-```bash
-python training/approve_cases.py   # Review pending
-python training/build_classifier.py --model base  # Retrain
-```
-
-## Requirements
-
-- Node.js 18+
-- Python 3.9+
-- Claude Code or OpenCode 1.0+
-
-Works on macOS, Linux, and Windows.
-
-## OpenCode Support
-
-Deliberate integrates with OpenCode via two plugins (installed automatically):
-- **Command Safety:** Intercepts `bash` commands like `rm`, `git reset`, `docker rm`.
-- **Change Summaries:** Summarizes file modifications from `write`, `edit`, `patch`, and `multiedit` tools.
-
-Unlike standard plugins, these reuse the same Python analysis engine as Claude Code, ensuring consistent safety rules and explanations across platforms.
-
-**Note:** You must restart OpenCode after `deliberate install`.
-
-## Antigravity Support
-
-Deliberate integrates with Antigravity via shell hooks (installed automatically):
-- **PreToolUse:** Intercepts `Bash` tool usage to analyze commands.
-- **PostToolUse:** Logs file changes from `Write`/`Edit` tools.
-
-Hooks are installed to `~/.antigravity/hooks/` and enabled in `~/.antigravity/settings.json`.
-
-## Gemini Support
-
-Deliberate integrates with Gemini CLI via shell hooks (installed automatically):
-- **pre-command:** Intercepts shell commands.
-- **post-file-change:** Logs file modifications.
-
-Hooks are installed to `~/.gemini/hooks/` and enabled in `~/.gemini/settings.json`.
-
-## Uninstall
-
-```bash
-deliberate uninstall
-```
-
-Removes all hooks, plugins, and configuration.
-
-## Acknowledgments
-
-Command embeddings by [CmdCaliper](https://huggingface.co/CyCraftAI/CmdCaliper-base) from CyCraft AI.
+### Gemini CLI
+- pre-command analysis
+- post-file-change summaries
 
 ## License
 

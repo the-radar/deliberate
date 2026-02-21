@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Embedded chat:** Streaming “discuss this command/change” chat (mock mode when no keys are configured).
 - **Optional desktop GUI:** `deliberate gui` launches the Tauri companion app (kept for future IDE harness work).
 
+### Changed
+- **Classifier stack removed:** Deliberate no longer depends on CmdCaliper/ML classifier runtime.
+- **UX-first architecture:** Hooks now use lightweight local rule pre-assessment + LLM explanations, with review flow and auditability as first-class behavior.
+- **Server role narrowed:** `deliberate serve` now runs event/chat/config transport only (no classification endpoints).
+- **Repository cleanup:** Removed legacy classifier training assets under `training/` and classifier source under `src/classifier/`.
+
 ## [1.0.5] - 2026-01-21
 
 ### Added

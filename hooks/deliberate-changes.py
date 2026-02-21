@@ -4,10 +4,10 @@
 Deliberate - File Change Analysis Hook
 
 PostToolUse hook that explains what file changes occurred after Write/Edit operations.
-Multi-layer architecture for robust classification:
+Architecture:
 
-  Layer 1: Pattern matching + ML model (fast, immune to prompt injection)
-  Layer 2: LLM explanation (natural language, configurable provider)
+  1) Lightweight local rules for initial risk hints.
+  2) LLM explanation for human-readable review context.
 
 https://github.com/the-radar/deliberate
 """
@@ -16,12 +16,9 @@ import json
 import sys
 import os
 import urllib.request
-import urllib.error
 from pathlib import Path
 
 # Configuration
-CLASSIFIER_WRITE_URL = "http://localhost:8765/classify/write"
-CLASSIFIER_EDIT_URL = "http://localhost:8765/classify/edit"
 BROADCAST_URL = "http://localhost:8765/api/broadcast"
 
 # Support both plugin mode (CLAUDE_PLUGIN_ROOT) and npm install mode (~/.deliberate/)
@@ -35,9 +32,7 @@ else:
 
 MAX_CONTENT_LINES = 100
 TIMEOUT_SECONDS = 30
-CLASSIFIER_TIMEOUT = 5
 DEBUG = False
-USE_CLASSIFIER = True
 
 # Session state for deduplication and Pre/Post caching
 import hashlib
@@ -163,23 +158,6 @@ def get_warning_key(file_path: str, content_hash: str) -> str:
     """Generate a unique key for deduplication."""
     # MD5 used for cache key only, not security (nosec B324)
     return f"file-{hashlib.md5(file_path.encode(), usedforsecurity=False).hexdigest()[:8]}-{content_hash[:8]}"
-
-
-def load_blocking_config() -> dict:
-    """Load blocking configuration from ~/.deliberate/config.json"""
-    try:
-        config_path = Path(CONFIG_FILE)
-        if config_path.exists():
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                blocking = config.get("blocking", {})
-                return {
-                    "enabled": blocking.get("enabled", False),
-                    "confidenceThreshold": blocking.get("confidenceThreshold", 0.85)
-                }
-    except Exception:
-        pass
-    return {"enabled": False, "confidenceThreshold": 0.85}
 
 
 def load_dedup_config() -> bool:
@@ -347,47 +325,68 @@ def broadcast_event(session_id: str, data: dict):
         pass
 
 
-def call_classifier(operation: str, file_path: str, content: str = None, old_string: str = None, new_string: str = None) -> dict | None:
-    """Call the classifier server for pattern + ML based classification."""
-    if not USE_CLASSIFIER:
-        return None
+HIGH_RISK_PATH_HINTS = (
+    ".env",
+    "id_rsa",
+    "id_ed25519",
+    "authorized_keys",
+    "/etc/",
+    "/.ssh/",
+)
 
-    try:
-        if operation == "write":
-            request_body = json.dumps({
-                "filePath": file_path,
-                "content": content[:2000] if content else None
-            }).encode('utf-8')
-            url = CLASSIFIER_WRITE_URL
-        else:  # edit
-            request_body = json.dumps({
-                "filePath": file_path,
-                "oldString": old_string[:1000] if old_string else None,
-                "newString": new_string[:1000] if new_string else None
-            }).encode('utf-8')
-            url = CLASSIFIER_EDIT_URL
-
-        req = urllib.request.Request(
-            url,
-            data=request_body,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-
-        with urllib.request.urlopen(req, timeout=CLASSIFIER_TIMEOUT) as response:  # nosec B310
-            result = json.loads(response.read().decode('utf-8'))
-            debug(f"Classifier result: {result}")
-            return result
-
-    except urllib.error.URLError as e:
-        debug(f"Classifier unavailable: {e}")
-        return None
-    except Exception as e:
-        debug(f"Classifier error: {e}")
-        return None
+HIGH_RISK_CONTENT_HINTS = (
+    "BEGIN PRIVATE KEY",
+    "aws_access_key_id",
+    "aws_secret_access_key",
+    "api_key",
+    "secret_key",
+    "password=",
+    "token=",
+    "curl ",
+    "wget ",
+)
 
 
-def call_llm_for_explanation(file_path: str, operation: str, content: str, pre_classification: dict | None = None) -> dict | None:
+def assess_change_risk_by_rules(
+    operation: str,
+    file_path: str,
+    content: str = None,
+    old_string: str = None,
+    new_string: str = None
+) -> dict | None:
+    """Lightweight local pre-assessment for file changes."""
+    path_lower = str(file_path or "").lower()
+    body = (new_string if new_string is not None else content) or ""
+    body_snippet = str(body)[:4000]
+    body_lower = body_snippet.lower()
+
+    for hint in HIGH_RISK_PATH_HINTS:
+        if hint.lower() in path_lower:
+            return {
+                "risk": "DANGEROUS",
+                "reason": f"Sensitive path modified ({hint})",
+                "source": "rules"
+            }
+
+    for hint in HIGH_RISK_CONTENT_HINTS:
+        if hint.lower() in body_lower:
+            return {
+                "risk": "MODERATE",
+                "reason": f"Potentially sensitive or execution-oriented content detected ({hint})",
+                "source": "rules"
+            }
+
+    # Low-risk hints for docs/config style edits.
+    if path_lower.endswith((".md", ".txt", ".rst")):
+        return {"risk": "SAFE", "reason": "Documentation/text file change", "source": "rules"}
+
+    if operation == "write" and path_lower.endswith((".json", ".yaml", ".yml", ".toml")):
+        return {"risk": "SAFE", "reason": "Structured config file write", "source": "rules"}
+
+    return None
+
+
+def call_llm_for_explanation(file_path: str, operation: str, content: str, pre_assessment: dict | None = None) -> dict | None:
     """Call the configured LLM to explain the changes using Claude Agent SDK."""
 
     llm_config = load_llm_config()
@@ -404,12 +403,12 @@ def call_llm_for_explanation(file_path: str, operation: str, content: str, pre_c
 
     file_name = os.path.basename(file_path)
 
-    # Build context from pre-classification if available
+    # Build context from local pre-assessment if available
     context_note = ""
-    if pre_classification:
-        risk = pre_classification.get("risk", "UNKNOWN")
-        reason = pre_classification.get("reason", "")
-        source = pre_classification.get("source", "classifier")
+    if pre_assessment:
+        risk = pre_assessment.get("risk", "UNKNOWN")
+        reason = pre_assessment.get("reason", "")
+        source = pre_assessment.get("source", "rules")
         context_note = f"\n\nPre-screening ({source}): {risk} - {reason}"
 
     if operation == "write":
@@ -612,11 +611,9 @@ def main():
     except Exception:
         pass
 
-    # Layer 1: Try classifier server first (pattern + ML) for risk level
-    # MultiEdit uses the edit endpoint (has old/new strings like Edit)
-    classifier_op = "edit" if operation == "multiedit" else operation
-    classifier_result = call_classifier(
-        operation=classifier_op,
+    # Layer 1: local rule pre-assessment.
+    pre_assessment = assess_change_risk_by_rules(
+        operation=operation,
         file_path=file_path,
         content=content if operation == "write" else None,
         old_string=old_string if operation in ("edit", "multiedit") else None,
@@ -625,29 +622,36 @@ def main():
 
     # Layer 2: Get LLM explanation for detailed analysis
     debug(f"Analyzing {operation}: {file_path[:80]}")
-    llm_result = call_llm_for_explanation(file_path, operation, content_desc, classifier_result)
+    llm_result = call_llm_for_explanation(file_path, operation, content_desc, pre_assessment)
 
-    # Progressive degradation: Use classifier if LLM unavailable
+    # Progressive degradation: use local rule pre-assessment if LLM is unavailable.
     llm_unavailable_warning = ""
     if not llm_result:
-        if classifier_result and classifier_result.get("source") != "fallback":
-            # Classifier worked, use its result even without LLM explanation
-            risk = classifier_result.get("risk", "MODERATE")
-            explanation = classifier_result.get('reason', 'Review file change manually')
-            llm_unavailable_warning = "\n\n⚠️  LLM unavailable - using basic pattern matching only.\nTo get detailed explanations, configure: ~/.deliberate/config.json\nOr run: deliberate install"
-            debug("LLM unavailable, using classifier-only result")
+        if pre_assessment:
+            risk = pre_assessment.get("risk", "MODERATE")
+            explanation = pre_assessment.get('reason', 'Review file change manually')
+            llm_unavailable_warning = "\n\n⚠️  LLM unavailable - using local rules only.\nTo get detailed explanations, configure: ~/.deliberate/config.json\nOr run: deliberate install"
+            debug("LLM unavailable, using rule pre-assessment")
         else:
-            # Both layers failed - exit silently (fail-open)
-            # This prevents blocking user if Deliberate is misconfigured
-            debug("Both classifier and LLM unavailable, allowing file change")
+            # No LLM and no rule match: fail-open.
+            debug("No LLM and no rule pre-assessment, allowing file change")
             sys.exit(0)
     else:
-        # Use classifier risk if available, otherwise use LLM risk
-        if classifier_result:
-            risk = classifier_result.get("risk", llm_result["risk"])
-        else:
-            risk = llm_result["risk"]
+        risk = llm_result["risk"]
         explanation = llm_result["explanation"]
+
+        # If local rules consider the change risky but LLM says SAFE, keep it in
+        # review by promoting to MODERATE.
+        if pre_assessment and pre_assessment.get("risk") == "DANGEROUS" and risk == "SAFE":
+            risk = "MODERATE"
+            reason = pre_assessment.get("reason", "Local rule matched dangerous pattern")
+            explanation = f"{explanation}\n\nLocal rule note: {reason}"
+
+    if not explanation or explanation == "None":
+        if pre_assessment and pre_assessment.get("reason"):
+            explanation = pre_assessment.get("reason")
+        else:
+            explanation = "Review file change manually"
 
     # Session deduplication - check if we've already warned about this exact change
     if load_dedup_config():

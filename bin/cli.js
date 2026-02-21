@@ -7,7 +7,6 @@
 import { Command } from 'commander';
 import { install } from '../src/install.js';
 import { startServer } from '../src/server.js';
-import { classify, getStatus } from '../src/classifier/index.js';
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 import { homedir } from 'os';
@@ -31,7 +30,7 @@ program
 
 program
   .command('serve')
-  .description('Start the classifier server')
+  .description('Start the Deliberate local server')
   .option('-p, --port <port>', 'Port to listen on', '8765')
   .action(async (options) => {
     await startServer(parseInt(options.port));
@@ -134,17 +133,8 @@ program
   });
 
 program
-  .command('classify <input>')
-  .description('Classify a command or file change')
-  .option('-t, --type <type>', 'Type of input: command, edit, write', 'command')
-  .action(async (input, options) => {
-    const result = await classify(input, options.type);
-    console.log(JSON.stringify(result, null, 2));
-  });
-
-program
   .command('status')
-  .description('Check if hooks are installed and classifier is ready')
+  .description('Check if hooks are installed and Deliberate is ready')
   .action(async () => {
     console.log('Deliberate Status\n');
 
@@ -227,25 +217,12 @@ program
       console.log('OpenCode:   ❌ Config not found');
     }
 
-    // Check classifier status
-    const classifierStatus = getStatus();
-
-    if (classifierStatus.patternMatcher?.ready) {
-      console.log('Patterns:   ✅ Ready');
-    } else {
-      console.log('Patterns:   ❌ Not loaded');
-    }
-
-    if (classifierStatus.modelClassifier?.ready) {
-      console.log('Classifier: ✅ Ready');
-    } else {
-      console.log('Classifier: ⚠️  Will load on first use');
-    }
+    console.log('Server:     ℹ️  Start with `deliberate serve` when using pane/chat APIs');
 
     // Overall status
     console.log('');
     if (hooksInstalled || openCodeInstalled) {
-      console.log('Status: Ready to protect your agent sessions');
+      console.log('Status: Ready for review-first Deliberate workflows');
     } else {
       console.log('Status: Run "deliberate install" to set up hooks');
     }

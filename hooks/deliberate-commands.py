@@ -4,10 +4,10 @@
 Deliberate - Command Analysis Hook
 
 PreToolUse hook that explains what shell commands will do before execution.
-Multi-layer architecture for robust classification:
+Architecture:
 
-  Layer 1: Pattern matching + ML model (fast, immune to prompt injection)
-  Layer 2: LLM explanation (natural language, configurable provider)
+  1) Lightweight local rules for initial risk hints.
+  2) LLM explanation for human-readable review context.
 
 https://github.com/the-radar/deliberate
 """
@@ -23,14 +23,12 @@ import tempfile
 import time
 import shlex
 import urllib.parse
-import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 # Configuration
-CLASSIFIER_URL = "http://localhost:8765/classify/command"
 BROADCAST_URL = "http://localhost:8765/api/broadcast"
 LLM_MODE = os.environ.get("DELIBERATE_LLM_MODE")
 
@@ -44,9 +42,7 @@ else:
     CONFIG_FILE = str(Path.home() / ".deliberate" / "config.json")
 
 TIMEOUT_SECONDS = 30
-CLASSIFIER_TIMEOUT = 5  # Classifier should be fast
 DEBUG = False
-USE_CLASSIFIER = True  # Try classifier first if available
 WEB_CACHE_TTL_SECONDS = 6 * 60 * 60
 WEB_CACHE_MAX_ENTRIES = 120
 
@@ -1131,15 +1127,6 @@ def deliberate_enabled() -> bool:
     return True
 
 
-def load_blocking_config() -> dict:
-    """Load blocking configuration from config file."""
-    blocking = _load_config().get("blocking", {})
-    return {
-        "enabled": blocking.get("enabled", False),
-        "confidenceThreshold": blocking.get("confidenceThreshold", 0.85)
-    }
-
-
 def load_dedup_config() -> bool:
     """Load deduplication config - returns True if dedup is enabled (default)."""
     return _load_config().get("deduplication", {}).get("enabled", True)
@@ -1925,7 +1912,7 @@ def load_llm_config() -> dict | None:
         "model": llm.get("model")
     }
 
-# Commands that are always safe (skip explanation) - fallback if classifier unavailable
+# Commands that are usually safe (local heuristic pre-assessment).
 SAFE_PREFIXES = [
     "ls", "pwd", "echo", "cat", "head", "tail", "wc", "which", "whoami",
     "date", "cal", "uptime", "hostname", "uname", "env", "printenv",
@@ -1936,7 +1923,7 @@ SAFE_PREFIXES = [
     "pgrep", "ps aux", "top -l", "htop",
 ]
 
-# Patterns that indicate potentially dangerous commands - fallback if classifier unavailable
+# Patterns that indicate potentially dangerous commands (local heuristic).
 DANGEROUS_PATTERNS = [
     "rm -rf", "rm -r", "rmdir",
     "sudo", "su ",
@@ -1967,37 +1954,22 @@ def is_safe_command(command: str) -> bool:
 
 
 def is_dangerous_command(command: str) -> bool:
-    """Check if command matches dangerous patterns (fallback)."""
+    """Check if command matches dangerous local patterns."""
     cmd_lower = command.lower()
     return any(pattern.lower() in cmd_lower for pattern in DANGEROUS_PATTERNS)
 
 
-def call_classifier(command: str) -> dict | None:
-    """Call the classifier server for pattern + ML based classification."""
-    if not USE_CLASSIFIER:
-        return None
+def assess_command_risk_by_rules(command: str) -> dict | None:
+    """Lightweight local pre-assessment used before LLM explanation.
 
-    request_body = json.dumps({"command": command}).encode('utf-8')
-
-    try:
-        req = urllib.request.Request(
-            CLASSIFIER_URL,
-            data=request_body,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-
-        with urllib.request.urlopen(req, timeout=CLASSIFIER_TIMEOUT) as response:  # nosec B310
-            result = json.loads(response.read().decode('utf-8'))
-            debug(f"Classifier result: {result}")
-            return result
-
-    except urllib.error.URLError as e:
-        debug(f"Classifier unavailable: {e}")
-        return None
-    except Exception as e:
-        debug(f"Classifier error: {e}")
-        return None
+    This keeps Deliberate responsive and avoids model dependencies while still
+    surfacing obvious safe/dangerous patterns.
+    """
+    if is_safe_command(command):
+        return {"risk": "SAFE", "reason": "Matched local safe command pattern", "source": "rules"}
+    if is_dangerous_command(command):
+        return {"risk": "DANGEROUS", "reason": "Matched local dangerous command pattern", "source": "rules"}
+    return None
 
 
 def extract_script_content(command: str) -> str | None:
@@ -2110,7 +2082,7 @@ def extract_inline_content(command: str) -> str | None:
 
 def call_llm_for_explanation(
     command: str,
-    pre_classification: dict | None = None,
+    pre_assessment: dict | None = None,
     script_content: str | None = None,
     evidence: List[dict] | None = None,
 ) -> dict | None:
@@ -2130,12 +2102,12 @@ def call_llm_for_explanation(
         debug("Non-OAuth provider - falling back to direct API")
         return None
 
-    # Build context from pre-classification if available
+    # Build context from local pre-assessment if available
     context_note = ""
-    if pre_classification:
-        risk = pre_classification.get("risk", "UNKNOWN")
-        reason = pre_classification.get("reason", "")
-        source = pre_classification.get("source", "classifier")
+    if pre_assessment:
+        risk = pre_assessment.get("risk", "UNKNOWN")
+        reason = pre_assessment.get("reason", "")
+        source = pre_assessment.get("source", "rules")
         context_note = f"\n\nPre-screening ({source}): {risk} - {reason}"
 
     danger_note = ""
@@ -2411,17 +2383,8 @@ def main():
     if destruction_consequences and destruction_consequences.get("warning"):
         destruction_warning = f"\n\n{destruction_consequences['warning']}"
 
-    # Layer 1: Try classifier server first (pattern + ML) for risk level
-    classifier_result = call_classifier(command)
-
-    # Fallback: Use inline pattern matching if classifier unavailable
-    if not classifier_result:
-        if is_safe_command(command):
-            classifier_result = {"risk": "SAFE", "reason": "Known safe command pattern", "source": "pattern"}
-        elif is_dangerous_command(command):
-            classifier_result = {"risk": "DANGEROUS", "reason": "Known dangerous command pattern", "source": "pattern"}
-        else:
-            classifier_result = None  # No pattern match, rely on LLM
+    # Layer 1: local rules for quick pre-assessment.
+    pre_assessment = assess_command_risk_by_rules(command)
 
     # Extract script content if this is a script execution command
     script_content = extract_script_content(command)
@@ -2436,39 +2399,39 @@ def main():
     # Use whichever content we found (mutually exclusive in practice)
     # Script content = executing a file, inline content = writing via heredoc/echo
     analyzed_content = script_content or inline_content
-    is_inline_write = inline_content is not None
 
     # Layer 2: Get LLM explanation for detailed analysis
     debug(f"Analyzing command: {command[:80]}")
     broadcast_progress(session_id, analysis_id, command, cwd, "llm", "Drafting explanation")
-    llm_result = call_llm_for_explanation(command, classifier_result, analyzed_content, evidence)
+    llm_result = call_llm_for_explanation(command, pre_assessment, analyzed_content, evidence)
 
-    # Progressive degradation: Use classifier if LLM unavailable
+    # Progressive degradation: use local pre-assessment if LLM is unavailable.
     llm_unavailable_warning = ""
     if not llm_result:
-        if classifier_result and classifier_result.get("source") != "fallback":
-            # Classifier worked, use its result even without LLM explanation
-            risk = classifier_result.get("risk", "MODERATE")
-            explanation = classifier_result.get('reason', 'Review command manually')
-            llm_unavailable_warning = "\n\n⚠️  LLM unavailable - using basic pattern matching only.\nTo get detailed explanations, configure: ~/.deliberate/config.json\nOr run: deliberate install"
-            debug("LLM unavailable, using classifier-only result")
+        if pre_assessment:
+            risk = pre_assessment.get("risk", "MODERATE")
+            explanation = pre_assessment.get('reason', 'Review command manually')
+            llm_unavailable_warning = "\n\n⚠️  LLM unavailable - using local rules only.\nTo get detailed explanations, configure: ~/.deliberate/config.json\nOr run: deliberate install"
+            debug("LLM unavailable, using rule pre-assessment")
         else:
-            # Both layers failed - exit silently (fail-open)
-            # This prevents blocking user if Deliberate is misconfigured
-            debug("Both classifier and LLM unavailable, allowing command")
+            # No LLM and no rule match: fail-open.
+            debug("No LLM and no rule pre-assessment, allowing command")
             sys.exit(0)
     else:
-        # Use classifier risk if available, otherwise use LLM risk
-        if classifier_result:
-            risk = classifier_result.get("risk", llm_result["risk"])
-        else:
-            risk = llm_result["risk"]
+        risk = llm_result["risk"]
         explanation = llm_result["explanation"]
 
-    # Guard against None/empty explanation - fall back to classifier reason or generic message
+        # If a local dangerous rule triggers but the LLM says SAFE, keep this in
+        # review flow by promoting to MODERATE instead of hard-blocking.
+        if pre_assessment and pre_assessment.get("risk") == "DANGEROUS" and risk == "SAFE":
+            risk = "MODERATE"
+            reason = pre_assessment.get("reason", "Local rule matched dangerous pattern")
+            explanation = f"{explanation}\n\nLocal rule note: {reason}"
+
+    # Guard against None/empty explanation - fall back to local reason or generic message
     if not explanation or explanation == "None":
-        if classifier_result and classifier_result.get("reason"):
-            explanation = classifier_result.get("reason")
+        if pre_assessment and pre_assessment.get("reason"):
+            explanation = pre_assessment.get("reason")
         else:
             explanation = "Review command before proceeding"
 
@@ -2477,7 +2440,8 @@ def main():
     if matched_auto_approve_pattern:
         auto_approval = {
             "matched": True,
-            "pattern": matched_auto_approve_pattern
+            "pattern": matched_auto_approve_pattern,
+            "applied": False,
         }
 
     # NOTE: Deduplication is handled AFTER block/allow decision
@@ -2538,43 +2502,11 @@ def main():
             if backup_path:
                 debug(f"Created pre-destruction backup at: {backup_path}")
 
-    # Auto-block DANGEROUS commands when both classifier AND LLM agree
-    # This catches truly malicious commands like `rm -rf /` or malicious scripts
-    # NOTE: Inline writes (heredocs/echo) only get "ask" - they're writes, not executions
-    if risk == "DANGEROUS" and not is_inline_write:
-        classifier_dangerous = classifier_result and classifier_result.get("risk") == "DANGEROUS"
-        llm_dangerous = llm_result and llm_result.get("risk") == "DANGEROUS"
-
-        # Block if both agree OR if script content was analyzed and found dangerous
-        both_agree = classifier_dangerous and llm_dangerous
-        script_analyzed = script_content is not None and llm_dangerous
-
-        if both_agree or script_analyzed:
-            broadcast_event("command_analyzed", session_id, {
-                "analysisId": analysis_id,
-                "command": command,
-                "cwd": cwd,
-                "risk": risk,
-                "explanation": explanation,
-                "evidence": evidence,
-                "consequences": destruction_consequences,
-                "workflowPatterns": workflow_patterns,
-                "backupPath": backup_path,
-                "autoApproval": auto_approval,
-                "permissionDecision": "block"
-            })
-            # Auto-block with exit code 2 - cannot proceed
-            if surfacing_mode == "full":
-                block_message = f"⛔ BLOCKED by Deliberate: {explanation}"
-            else:
-                block_message = "⛔ BLOCKED by Deliberate (details in Deliberate pane)"
-            print(block_message, file=sys.stderr)
-            debug(f"Auto-blocked DANGEROUS command (classifier={classifier_dangerous}, llm={llm_dangerous}, script={script_content is not None})")
-            sys.exit(2)
-
     # Explicit user policy: always allow matching commands without prompting.
     # We still run full analysis and keep audit events/cached summaries.
-    if auto_approval:
+    # Guardrail: if the command is assessed as DANGEROUS, require manual review.
+    if auto_approval and risk != "DANGEROUS":
+        auto_approval["applied"] = True
         broadcast_progress(
             session_id,
             analysis_id,

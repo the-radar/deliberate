@@ -484,7 +484,7 @@ export async function runTui(options = {}) {
 
   let config = loadConfig();
   const serverBaseUrl = config.gui?.serverBaseUrl || 'http://localhost:8765';
-  const serverPort = config.classifier?.serverPort || 8765;
+  const serverPort = config.server?.port || 8765;
   const enabledFromConfig = config.deliberate?.enabled;
   const deliberateOn = enabledFromConfig === false ? false : true;
 

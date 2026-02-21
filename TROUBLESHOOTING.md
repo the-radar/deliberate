@@ -1,250 +1,129 @@
 # Troubleshooting
 
-## Installation Issues
+## Install and hook wiring
 
-### "command not found: deliberate-claude-code"
-
-The CLI wasn't installed globally or isn't in your PATH.
+### `deliberate` command not found
 
 ```bash
-# Try installing globally
-npm install -g @deliberate/claude-code
-
-# Or run directly from the package
-npx @deliberate/claude-code install
+npm install -g deliberate
 ```
 
-### Hooks not triggering
-
-1. **Check hooks are installed:**
-   ```bash
-   ls -la ~/.claude/hooks/ | grep deliberate
-   ```
-
-   You should see:
-   ```
-   deliberate-explain-command.py -> /path/to/hooks/explain-command.py
-   deliberate-explain-changes.py -> /path/to/hooks/explain-changes.py
-   ```
-
-2. **Check settings.json:**
-   ```bash
-   cat ~/.claude/settings.json | grep -A5 deliberate
-   ```
-
-   Should show hook configurations for PreToolUse and PostToolUse.
-
-3. **Restart Claude Code:**
-   Hooks are loaded on startup. Close and reopen Claude Code.
-
-### Python errors in hooks
-
-The hooks require Python 3.9+.
+If global install is not available:
 
 ```bash
-# Check Python version
+npx deliberate install
+```
+
+### Hooks are not triggering
+
+1. Verify hook files exist:
+
+```bash
+ls -la ~/.claude/hooks/ | grep deliberate
+```
+
+2. Verify hook entries in `~/.claude/settings.json`.
+
+3. Restart Claude Code (hooks load on startup).
+
+### Python errors
+
+Hooks require Python 3.9+:
+
+```bash
 python3 --version
-
-# On Windows, ensure Python is in PATH
-python --version
 ```
 
-### Permission denied (Unix)
+### Permission denied on hook scripts (macOS/Linux)
 
 ```bash
-# Make hooks executable
 chmod +x ~/.claude/hooks/deliberate-*.py
 ```
 
-## LLM Configuration Issues
+## Server and pane
 
-### "No LLM configured"
-
-The hooks can't find a valid configuration.
+### Port already in use (`8765`)
 
 ```bash
-# Check config exists
-cat ~/.deliberate/config.json
-
-# Reconfigure
-deliberate-claude-code install
-```
-
-### Anthropic API errors
-
-```
-urllib.error.HTTPError: HTTP Error 401: Unauthorized
-```
-
-Your API key is invalid or expired.
-
-1. Check your key at https://console.anthropic.com/settings/keys
-2. Update config:
-   ```bash
-   # Edit ~/.deliberate/config.json and update apiKey
-   ```
-
-### anthropic-max-router connection refused
-
-```
-urllib.error.URLError: <urlopen error [Errno 61] Connection refused>
-```
-
-The router isn't running.
-
-```bash
-# Start the router
-anthropic-max-router
-
-# Or check if it's running
-curl http://localhost:3456/health
-```
-
-### Ollama connection refused
-
-```bash
-# Start Ollama
-ollama serve
-
-# Check it's running
-curl http://localhost:11434/api/tags
-```
-
-## Classifier Server Issues
-
-### Model download fails
-
-```
-Failed to load model: Unauthorized access
-```
-
-The model might not be accessible. Check your network connection and try again.
-
-```bash
-# Clear cache and retry
-rm -rf .cache/transformers
-deliberate-claude-code serve
-```
-
-### Server already running
-
-```
-Error: listen EADDRINUSE: address already in use :::8765
-```
-
-Another instance is running or the port is in use.
-
-```bash
-# Find what's using the port
 lsof -i :8765
-
-# Kill it if needed
-kill -9 <PID>
 ```
 
-### High memory usage
+Stop conflicting process, or run Deliberate on a different port.
 
-The ML model uses ~500MB RAM. If this is too much:
+### Pane opens but no live events
 
-1. Don't run the server (pattern matching will be used as fallback)
-2. Or use a machine with more RAM
+- Make sure hooks are installed and Deliberate is enabled (`x` toggle in TUI).
+- Start server if needed:
 
-## Hook Output Issues
-
-### Explanations not appearing
-
-1. **Check LLM is reachable:**
-   ```bash
-   # For anthropic-max-router
-   curl http://localhost:3456/health
-
-   # For Ollama
-   curl http://localhost:11434/api/tags
-   ```
-
-2. **Enable debug mode:**
-   Edit the hook file and set `DEBUG = True`, then check stderr.
-
-### Wrong risk classification
-
-The classifier uses:
-- Pattern matching (fallback)
-- ML model (if server running)
-
-If classifications seem wrong:
-1. Start the classifier server for better accuracy
-2. Report false positives/negatives as issues
-
-### Timeout errors
-
-Hooks have a 35-second timeout by default. If your LLM is slow:
-
-1. Edit `~/.claude/settings.json`
-2. Increase the timeout value for deliberate hooks
-
-## Windows-Specific Issues
-
-### Symlinks not working
-
-Windows requires admin privileges for symlinks. The installer copies files instead.
-
-If hooks aren't updating after edits:
 ```bash
-# Re-run install to copy updated files
-deliberate-claude-code install
+deliberate serve
 ```
 
-### Python not found
+- Keep in mind events are persisted locally under `~/.deliberate/events/`, so history should still appear even if server starts late.
 
-Ensure Python is installed and in your PATH:
+### Pane focus issues in tmux/WezTerm
+
+Use `deliberate pane` from the same terminal session as Claude Code. Deliberate uses detached split behavior in tmux to avoid stealing focus.
+
+## LLM explanation issues
+
+### No LLM configured
+
+Run install again and configure provider:
+
+```bash
+deliberate install
+```
+
+### LLM/network unavailable
+
+Deliberate falls back to local rule hints and still preserves review flow. You can continue without full LLM detail.
+
+## TUI behavior
+
+### Need history instead of pending queue
+
+Press `v` to toggle from review queue to history mode.
+
+### Need to stop repeated prompts for a known command
+
+Select event and press `s` to save an exact “don’t flag” rule, or use `w` for a guided always-allow policy pattern.
+
+## Windows notes
+
+### Symlinks
+
+Installer copies hook files on Windows instead of symlinking. Re-run install after local hook edits:
+
+```bash
+deliberate install
+```
+
+### Python PATH
+
 ```cmd
 python --version
 ```
 
-If not found, install from https://python.org and check "Add to PATH" during installation.
-
-### Path issues
-
-Windows uses backslashes. If you see path errors:
-1. Check config file uses forward slashes or escaped backslashes
-2. Reinstall to regenerate paths
+If missing, install Python and enable “Add to PATH”.
 
 ## Debugging
 
-### Enable verbose logging
+### Enable hook debug logs
 
-Edit the hook files:
-```python
-DEBUG = True  # Near the top of the file
-```
+Set `DEBUG = True` in the relevant hook file under `~/.claude/hooks/` (or source repo if symlinked).
 
-Then run Claude Code and check stderr output.
-
-### Test hooks manually
+### Manual hook test
 
 ```bash
-# Test explain-command
-echo '{"tool_name": "Bash", "tool_input": {"command": "ls -la"}}' | python3 ~/.claude/hooks/deliberate-explain-command.py
-
-# Test explain-changes
-echo '{"tool_name": "Write", "tool_input": {"file_path": "/tmp/test.txt", "content": "hello"}}' | python3 ~/.claude/hooks/deliberate-explain-changes.py
+echo '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' | python3 ~/.claude/hooks/deliberate-commands.py
 ```
 
-### Check classifier directly
+## Still stuck?
 
-```bash
-# If server is running
-curl -X POST http://localhost:8765/classify/command \
-  -H "Content-Type: application/json" \
-  -d '{"command": "rm -rf /"}'
-```
-
-## Still Having Issues?
-
-1. Check the [GitHub issues](https://github.com/anthropics/deliberate-claude-code/issues)
-2. Open a new issue with:
-   - Your OS and version
-   - Node.js version (`node --version`)
-   - Python version (`python3 --version`)
-   - Error messages
-   - Steps to reproduce
+Capture:
+- OS + version
+- Node version (`node --version`)
+- Python version (`python3 --version`)
+- exact error message
+- minimal repro steps

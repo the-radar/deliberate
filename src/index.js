@@ -5,17 +5,6 @@
  * Main exports for programmatic use
  */
 
-// Classifier exports
-export {
-  classify,
-  quickCheck,
-  getStatus,
-  preloadModel,
-  initialize,
-  PatternMatcher,
-  ModelClassifier
-} from './classifier/index.js';
-
 // Server exports
 export { startServer } from './server.js';
 

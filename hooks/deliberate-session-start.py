@@ -55,7 +55,8 @@ def _load_config() -> Dict[str, Any]:
 
 def _get_server_port(config: dict) -> int:
     try:
-        port = int((config.get("classifier", {}) or {}).get("serverPort", DEFAULT_SERVER_PORT))
+        server_cfg = config.get("server", {}) or {}
+        port = int(server_cfg.get("port", DEFAULT_SERVER_PORT))
         return port if 1 <= port <= 65535 else DEFAULT_SERVER_PORT
     except Exception:
         return DEFAULT_SERVER_PORT

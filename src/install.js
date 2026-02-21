@@ -5,7 +5,7 @@
  * - Updating ~/.claude/settings.json
  * - Installing OpenCode plugin (if available)
  * - Configuring Deliberate LLM provider
- * - Optionally starting the classifier server
+ * - Optional server startup for pane/chat transport
  */
 
 import fs from 'fs';
@@ -37,24 +37,12 @@ const GEMINI_SETTINGS = path.join(GEMINI_DIR, 'settings.json');
 
 // Python command (python on Windows, python3 on Unix)
 const PYTHON_CMD = IS_WINDOWS ? 'python' : 'python3';
-const PIP_CMD = IS_WINDOWS ? 'pip' : 'pip3';
-
-// Required Python packages
-// NOTE: `claude-agent-sdk` is intentionally not required here.
-// The hooks can optionally use it for subscription-based LLM calls, but it is
-// not reliably available via PyPI in all environments. Deliberate should still
-// install and function without it.
-const PYTHON_DEPS = ['sentence-transformers', 'scikit-learn', 'numpy'];
 
 const OPENCODE_CONFIG_FILES = ['opencode.json', 'opencode.jsonc'];
 
-// Model download configuration
-const MODELS_URL = 'https://github.com/the-radar/deliberate/releases/download/v1.0.0/deliberate-models.tar.gz';
-const MODELS_DIR = path.join(__dirname, '..', 'models');
-
 // Hook files to install
 const HOOKS = [
-  // Commands - PreToolUse for analysis and optional blocking
+  // Commands - PreToolUse for analysis and review gating
   {
     source: 'deliberate-commands.py',
     dest: 'deliberate-commands.py',
@@ -90,70 +78,6 @@ const HOOKS = [
     timeout: 5
   }
 ];
-
-/**
- * Download and extract ML models from GitHub Release
- * Uses execSync with hardcoded URLs - no user input, shell injection not possible
- * @returns {Promise<boolean>} Success
- */
-async function downloadModels() {
-  // Check if models already exist
-  const modelCheck = path.join(MODELS_DIR, 'cmdcaliper-base', 'model.safetensors');
-  if (fs.existsSync(modelCheck)) {
-    console.log('  Models already downloaded');
-    return true;
-  }
-
-  console.log('  Downloading models from GitHub Release...');
-  const tarPath = path.join(os.tmpdir(), 'deliberate-models.tar.gz');
-
-  try {
-    // Download - URLs are hardcoded constants, not user input
-    execSync(`curl -L -o "${tarPath}" "${MODELS_URL}"`, {
-      stdio: 'inherit',
-      timeout: 300000  // 5 min timeout
-    });
-
-    // Create models directory
-    ensureDir(MODELS_DIR);
-
-    // Extract tarball
-    execSync(`tar -xzf "${tarPath}" -C "${path.dirname(MODELS_DIR)}"`, {
-      stdio: 'inherit'
-    });
-
-    // Clean up tarball
-    fs.unlinkSync(tarPath);
-
-    console.log('  Models downloaded successfully');
-    return true;
-  } catch (error) {
-    console.warn('  Direct download failed, attempting Python preload...');
-    
-    // Fallback: Use Python to download model to cache
-    try {
-      const classifyScript = path.join(__dirname, 'classifier', 'classify_command.py');
-      // Use base64 encoded "echo init" to trigger model load
-      const cmd = `${PYTHON_CMD} "${classifyScript}" --base64 "ZWNobyBpbml0" --model base`;
-      
-      execSync(cmd, { 
-        stdio: 'inherit',
-        timeout: 600000 // 10 minutes
-      });
-      
-      console.log('  Model preloaded successfully (cached)');
-      return true;
-    } catch (pyError) {
-      console.error('  Failed to download models:', error.message);
-      console.error('  Failed to preload with Python:', pyError.message);
-      console.error('');
-      console.error('  You can manually download from:');
-      console.error(`    ${MODELS_URL}`);
-      console.error(`  And extract to: ${MODELS_DIR}`);
-      return false;
-    }
-  }
-}
 
 /**
  * Get the command to run a Python hook
@@ -575,48 +499,6 @@ function checkPython() {
 }
 
 /**
- * Check if Python packages are installed
- * @returns {{installed: string[], missing: string[]}}
- */
-function checkPythonDeps() {
-  const installed = [];
-  const missing = [];
-
-  for (const pkg of PYTHON_DEPS) {
-    try {
-      // Use pip show to check if package is installed
-      execSync(`${PIP_CMD} show ${pkg}`, { stdio: 'ignore' });
-      installed.push(pkg);
-    } catch {
-      missing.push(pkg);
-    }
-  }
-
-  return { installed, missing };
-}
-
-/**
- * Install missing Python packages
- * @param {string[]} packages - Packages to install
- * @returns {boolean} - Success
- */
-function installPythonDeps(packages) {
-  if (packages.length === 0) return true;
-
-  console.log(`Installing: ${packages.join(', ')}...`);
-  try {
-    execSync(`${PIP_CMD} install ${packages.join(' ')}`, {
-      stdio: 'inherit',
-      timeout: 300000  // 5 min timeout for large packages
-    });
-    return true;
-  } catch (error) {
-    console.error('Failed to install Python packages:', error.message);
-    return false;
-  }
-}
-
-/**
  * Check if Claude CLI is available
  * @returns {boolean}
  */
@@ -819,7 +701,7 @@ async function configureLLM() {
 
   options.push({
     value: 'skip',
-    label: 'Skip for now (classifier will still work, no explanations)'
+    label: 'Skip for now (hooks still run, no LLM explanations)'
   });
 
   const provider = await select('How do you want to authenticate?', options);
@@ -827,7 +709,7 @@ async function configureLLM() {
   if (provider === 'skip') {
     console.log('');
     console.log('Skipped LLM configuration.');
-    console.log('The classifier will still work, but without detailed explanations.');
+    console.log('Hooks will still run, but explanations will be basic.');
     console.log('You can configure it later by editing:');
     console.log(`  ${getConfigFile()}`);
     return;
@@ -957,36 +839,6 @@ export async function install() {
   }
   console.log(`  ${python.version}`);
 
-  // Check Python dependencies
-  console.log('');
-  console.log('Checking Python dependencies...');
-  const deps = checkPythonDeps();
-
-  if (deps.missing.length > 0) {
-    console.log(`  Missing: ${deps.missing.join(', ')}`);
-    console.log('');
-    console.log('Installing Python dependencies...');
-    const success = installPythonDeps(deps.missing);
-    if (!success) {
-      console.error('');
-      console.error('Failed to install dependencies. Try manually:');
-      console.error(`  ${PIP_CMD} install ${deps.missing.join(' ')}`);
-      process.exit(1);
-    }
-    console.log('  Done!');
-  } else {
-    console.log('  All dependencies installed');
-  }
-
-  // Download ML models
-  console.log('');
-  console.log('Checking ML models...');
-  const modelsOk = await downloadModels();
-  if (!modelsOk) {
-    console.warn('Warning: Models not available. Classifier will not work.');
-    console.warn('LLM explanations will still work if configured.');
-  }
-
   // Install hooks
   console.log('');
   console.log('Installing hooks...');
@@ -1049,11 +901,8 @@ export async function install() {
   console.log('  2. Restart OpenCode to load the new plugin');
   console.log('  3. Restart Antigravity/Gemini to load new hooks');
   console.log('');
-  console.log('  4. (Optional) Start the classifier server for faster ML detection:');
+  console.log('  4. Start the Deliberate server (recommended for pane/chat APIs):');
   console.log('     deliberate serve');
-  console.log('');
-  console.log('  5. Test classification:');
-  console.log('     deliberate classify "rm -rf /"');
   console.log('');
 }
 

@@ -27,7 +27,7 @@ Finalize Deliberate as a review-first UX/explainability product (TUI-first), wit
 - Local validation now fully green (`npm test` passes end-to-end).
 
 ### Now:
-- Final commit + handoff for user validation in live Claude Code workflows.
+- Handoff for user validation in live Claude Code workflows.
 
 ### Next:
 - Run user-side validation and iterate on policy interview UX polish if needed.

@@ -22,7 +22,7 @@ Required outcome:
 - [x] Remove classifier training assets (`training/`) to eliminate dead maintenance surface.
 - [x] Update README and status/install text to reflect UX-first architecture.
 - [x] Run syntax/build checks and full tests.
-- [ ] Commit with clean, human message.
+- [x] Commit with clean, human message.
 
 ## System context (relevant files)
 - `/Users/h4tch1ing/Documents/deliberate/bin/cli.js`
@@ -56,7 +56,7 @@ Required outcome:
 - [x] Implementation complete
 - [x] Tests complete
 - [x] Docs/continuity updated
-- [ ] Commit complete
+- [x] Commit complete
 
 ## Questions / uncertainties
 - No blockers. Legacy config compatibility was removed in active codepaths to keep architecture explicit.

@@ -22,7 +22,7 @@ Required outcomes:
 - [x] Update default config schema with onboarding state.
 - [x] Update install success copy + README/TROUBLESHOOTING + changelog messaging.
 - [x] Add/extend tests for new config defaults and start helper behavior.
-- [ ] Run full build/test verification and commit.
+- [x] Run full build/test verification and commit.
 
 ## System context (relevant files)
 - `/Users/h4tch1ing/Documents/deliberate/bin/cli.js`
@@ -55,7 +55,7 @@ Required outcomes:
 - [x] Implementation complete
 - [x] Tests complete
 - [x] Docs complete
-- [ ] Commit complete
+- [x] Commit complete
 
 ## Questions / uncertainties
 - None blocking.

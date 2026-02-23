@@ -33,7 +33,7 @@ Polish first-run UX with one-command startup and onboarding walkthrough, while k
   - added test coverage for start/onboarding helpers
 
 ### Now:
-- Commit onboarding/startup polish and hand off for external review.
+- Hand off for external review.
 
 ### Next:
 - Run user-side validation and iterate on policy interview UX polish if needed.

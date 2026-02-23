@@ -56,10 +56,12 @@ The installer configures:
 
 ```bash
 deliberate install          # Install hooks/plugins and configure LLM
+deliberate start            # One-command startup (server + pane)
 deliberate status           # Check installation state
 deliberate serve            # Start local Deliberate server (events/chat/config)
 deliberate pane             # Open Deliberate TUI in a split pane (WezTerm/tmux)
 deliberate tui              # Run Deliberate TUI in current terminal
+deliberate onboarding       # Replay first-run walkthrough tips
 deliberate gui              # Launch optional desktop GUI
 ```
 
@@ -69,7 +71,13 @@ The TUI is designed for Claude Code/OpenCode side-pane workflows.
 
 It reads local JSONL event logs (`~/.deliberate/events/`) so you keep history even if the pane starts late.
 
-Typical workflow:
+Typical workflow (recommended):
+
+```bash
+deliberate start
+```
+
+Manual equivalent:
 
 ```bash
 deliberate serve

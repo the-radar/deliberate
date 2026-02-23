@@ -13,12 +13,13 @@ import { homedir } from 'os';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { installGuiFromGithubRelease, getInstalledGuiPath } from '../src/gui-install.js';
+import { loadConfig } from '../src/config.js';
 
 const program = new Command();
 
 program
   .name('deliberate')
-  .description('Safety layer for agentic coding tools')
+  .description('Review-first explainability companion for agentic coding')
   .version('1.0.0');
 
 program
@@ -34,6 +35,59 @@ program
   .option('-p, --port <port>', 'Port to listen on', '8765')
   .action(async (options) => {
     await startServer(parseInt(options.port));
+  });
+
+program
+  .command('start')
+  .description('One-command startup: ensure server is running and open Deliberate pane')
+  .option('--percent <percent>', 'Pane width percentage (10-80)', '30')
+  .option('--direction <dir>', 'Split direction: right or left', 'right')
+  .option('--all', 'Show all sessions (default is latest)', false)
+  .option('--session <id>', 'Filter to a specific session id', null)
+  .option('--no-follow', 'Do not auto-follow new events')
+  .option('--no-pane', 'Start server only (do not open pane)')
+  .option('--no-onboarding', 'Skip walkthrough text for this run')
+  .option('--force-onboarding', 'Show walkthrough even if already completed', false)
+  .action(async (options) => {
+    const {
+      ensureServerRunning,
+      formatStartStatus,
+      shouldShowOnboarding,
+      markOnboardingComplete,
+      renderOnboardingWalkthrough
+    } = await import('../src/start.js');
+
+    const config = loadConfig();
+    const status = await ensureServerRunning({ config, cwd: process.cwd() });
+    console.log(formatStartStatus(status));
+    if (!status.healthy) {
+      process.exitCode = 1;
+      return;
+    }
+
+    const showOnboarding = Boolean(
+      options.forceOnboarding ||
+      (options.onboarding !== false && shouldShowOnboarding(config))
+    );
+
+    if (showOnboarding) {
+      console.log(renderOnboardingWalkthrough());
+      markOnboardingComplete();
+    }
+
+    if (options.pane !== false) {
+      const { openPane } = await import('../src/pane.js');
+      await openPane({
+        percent: options.percent,
+        direction: options.direction,
+        allSessions: options.all,
+        sessionId: options.session,
+        follow: options.follow,
+        cwd: process.cwd()
+      });
+    } else {
+      console.log('Pane: skipped (--no-pane). Run `deliberate pane` when ready.');
+    }
   });
 
 program
@@ -133,6 +187,18 @@ program
   });
 
 program
+  .command('onboarding')
+  .description('Replay the Deliberate quick walkthrough')
+  .option('--no-mark-complete', 'Do not persist onboarding completion')
+  .action(async (options) => {
+    const { renderOnboardingWalkthrough, markOnboardingComplete } = await import('../src/start.js');
+    console.log(renderOnboardingWalkthrough());
+    if (options.markComplete !== false) {
+      markOnboardingComplete();
+    }
+  });
+
+program
   .command('status')
   .description('Check if hooks are installed and Deliberate is ready')
   .action(async () => {
@@ -217,7 +283,8 @@ program
       console.log('OpenCode:   ❌ Config not found');
     }
 
-    console.log('Server:     ℹ️  Start with `deliberate serve` when using pane/chat APIs');
+    console.log('Quick start: ℹ️  Run `deliberate start` (starts server + opens pane)');
+    console.log('Server only: ℹ️  Run `deliberate serve` when using pane/chat APIs');
 
     // Overall status
     console.log('');

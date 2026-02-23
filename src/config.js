@@ -104,6 +104,14 @@ const DEFAULT_CONFIG = {
 
     // Start the local Deliberate server if it is not running yet.
     autoStartServer: true
+  },
+
+  // CLI onboarding helper state.
+  // We show the quick walkthrough once by default, then keep it replayable via
+  // `deliberate onboarding`.
+  onboarding: {
+    completed: false,
+    lastShownAt: null
   }
 };
 

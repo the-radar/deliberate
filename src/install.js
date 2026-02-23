@@ -901,7 +901,10 @@ export async function install() {
   console.log('  2. Restart OpenCode to load the new plugin');
   console.log('  3. Restart Antigravity/Gemini to load new hooks');
   console.log('');
-  console.log('  4. Start the Deliberate server (recommended for pane/chat APIs):');
+  console.log('  4. One-command startup (recommended):');
+  console.log('     deliberate start');
+  console.log('');
+  console.log('     (or server only)');
   console.log('     deliberate serve');
   console.log('');
 }

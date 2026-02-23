@@ -1,7 +1,7 @@
 # Project Working State
 
 ## Current Goal:
-Finalize Deliberate as a review-first UX/explainability product (TUI-first), with security as a sidecar and no classifier/model stack.
+Polish first-run UX with one-command startup and onboarding walkthrough, while keeping Deliberate review-first and TUI-native.
 
 ## Constraints/Assumptions:
 - Keep hook fail-open behavior and low latency.
@@ -25,9 +25,15 @@ Finalize Deliberate as a review-first UX/explainability product (TUI-first), wit
   - removed `@huggingface/transformers` dependency and classifier packaging artifacts
   - updated server/CLI/install/config/hooks/docs to classifier-free architecture
 - Local validation now fully green (`npm test` passes end-to-end).
+- One-command startup + onboarding pass:
+  - added `deliberate start` (ensures server + opens pane)
+  - added `deliberate onboarding` (replay walkthrough)
+  - added startup/orchestration module `/Users/h4tch1ing/Documents/deliberate/src/start.js`
+  - updated docs/install messaging to point users to `deliberate start`
+  - added test coverage for start/onboarding helpers
 
 ### Now:
-- Handoff for user validation in live Claude Code workflows.
+- Commit onboarding/startup polish and hand off for external review.
 
 ### Next:
 - Run user-side validation and iterate on policy interview UX polish if needed.
@@ -37,16 +43,17 @@ Finalize Deliberate as a review-first UX/explainability product (TUI-first), wit
 
 ## Working Set (files/ids/commands):
 - `/Users/h4tch1ing/Documents/deliberate/WORK/2026-02-21_remove-classifier_WORKFILE.md`
+- `/Users/h4tch1ing/Documents/deliberate/WORK/2026-02-23_onboarding-start-workflow_WORKFILE.md`
 - `/Users/h4tch1ing/Documents/deliberate/bin/cli.js`
+- `/Users/h4tch1ing/Documents/deliberate/src/start.js`
 - `/Users/h4tch1ing/Documents/deliberate/src/server.js`
 - `/Users/h4tch1ing/Documents/deliberate/src/install.js`
 - `/Users/h4tch1ing/Documents/deliberate/src/config.js`
-- `/Users/h4tch1ing/Documents/deliberate/hooks/deliberate-commands.py`
-- `/Users/h4tch1ing/Documents/deliberate/hooks/deliberate-changes.py`
 - `/Users/h4tch1ing/Documents/deliberate/README.md`
-- `node --check bin/cli.js src/server.js src/install.js src/config.js src/index.js src/tui/index.js`
+- `/Users/h4tch1ing/Documents/deliberate/TROUBLESHOOTING.md`
+- `node --check bin/cli.js src/start.js src/config.js src/install.js src/index.js src/server.js src/tui/index.js`
 - `python3 -m py_compile hooks/deliberate-commands.py hooks/deliberate-commands-post.py hooks/deliberate-changes.py hooks/deliberate-session-start.py`
-- `python3 -m unittest hooks.tests.test_deliberate_commands -v`
+- `python3 -m unittest hooks.tests.test_deliberate_commands hooks.tests.test_deliberate_changes -v`
 - `npm test`
 
 ## Project Ammo (.ammo/)

@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Deliberate TUI + pane:** `deliberate tui` and `deliberate pane` provide a terminal-native side panel for Claude Code/OpenCode.
 - **Embedded chat:** Streaming “discuss this command/change” chat (mock mode when no keys are configured).
 - **Optional desktop GUI:** `deliberate gui` launches the Tauri companion app (kept for future IDE harness work).
+- **One-command startup:** Added `deliberate start` to ensure server health and open the pane in one step.
+- **Onboarding walkthrough:** Added `deliberate onboarding` and first-run walkthrough state in config.
 
 ### Changed
 - **Classifier stack removed:** Deliberate no longer depends on CmdCaliper/ML classifier runtime.

@@ -42,6 +42,16 @@ chmod +x ~/.claude/hooks/deliberate-*.py
 
 ## Server and pane
 
+### Quick start command
+
+If you want one-command startup, use:
+
+```bash
+deliberate start
+```
+
+This ensures the local server is healthy, then opens the TUI pane when split support is available.
+
 ### Port already in use (`8765`)
 
 ```bash
@@ -53,7 +63,13 @@ Stop conflicting process, or run Deliberate on a different port.
 ### Pane opens but no live events
 
 - Make sure hooks are installed and Deliberate is enabled (`x` toggle in TUI).
-- Start server if needed:
+- Start with one command:
+
+```bash
+deliberate start
+```
+
+- Or start server only:
 
 ```bash
 deliberate serve
@@ -64,6 +80,14 @@ deliberate serve
 ### Pane focus issues in tmux/WezTerm
 
 Use `deliberate pane` from the same terminal session as Claude Code. Deliberate uses detached split behavior in tmux to avoid stealing focus.
+
+### Need onboarding tips again
+
+Replay the quick walkthrough:
+
+```bash
+deliberate onboarding
+```
 
 ## LLM explanation issues
 

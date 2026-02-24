@@ -1127,6 +1127,27 @@ def deliberate_enabled() -> bool:
     return True
 
 
+def deliberate_record_only_enabled() -> bool:
+    """Record-only mode keeps analysis/logging but removes execution gating."""
+    try:
+        deliberate = _load_config().get("deliberate", {}) or {}
+
+        # Primary toggle.
+        value = deliberate.get("recordOnly")
+        if isinstance(value, bool):
+            return value
+
+        # Compatibility: allow mode strings if users/script set them directly.
+        mode = deliberate.get("mode")
+        if isinstance(mode, str):
+            normalized = mode.strip().lower().replace("_", "-")
+            if normalized in ("record-only", "record", "observe", "log-only"):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def load_dedup_config() -> bool:
     """Load deduplication config - returns True if dedup is enabled (default)."""
     return _load_config().get("deduplication", {}).get("enabled", True)
@@ -2377,9 +2398,11 @@ def main():
     else:
         broadcast_progress(session_id, analysis_id, command, cwd, "web_search_done", "No evidence found")
 
+    record_only_mode = deliberate_record_only_enabled()
+
     # User custom blocklist, hard stop before any heavier analysis.
     block_match = custom_blocklist_match(command, load_custom_blocklist())
-    if block_match:
+    if block_match and not record_only_mode:
         explanation = f"Command matched your custom blocklist entry: {block_match}"
         broadcast_event("command_analyzed", session_id, {
             "analysisId": analysis_id,
@@ -2398,6 +2421,15 @@ def main():
         else:
             print("⛔ BLOCKED by Deliberate (details in Deliberate pane)", file=sys.stderr)
         sys.exit(2)
+    elif block_match and record_only_mode:
+        broadcast_progress(
+            session_id,
+            analysis_id,
+            command,
+            cwd,
+            "record_only_override",
+            f"Record-only mode active, blocklist match logged: {block_match}"
+        )
 
     # Check command history for workflow patterns BEFORE individual analysis
     # Uses sliding window (default 3 commands) to avoid stale pattern matches
@@ -2483,6 +2515,15 @@ def main():
             explanation = pre_assessment.get("reason")
         else:
             explanation = "Review command before proceeding"
+
+    if block_match and record_only_mode:
+        # Keep explicit audit context when record-only overrides a block match.
+        risk = "DANGEROUS"
+        explanation = (
+            f"{explanation}\n\n"
+            f"Record-only override: this command matched your custom blocklist entry "
+            f"`{block_match}` but was logged and allowed."
+        )
 
     matched_auto_approve_pattern = auto_approve_match(command, load_auto_approve_patterns())
     auto_approval = None
@@ -2638,6 +2679,36 @@ def main():
         context += destruction_warning
     if backup_notice:
         context += backup_notice
+
+    # Record-only mode: keep analysis + telemetry but never block/ask.
+    if record_only_mode:
+        broadcast_progress(session_id, analysis_id, command, cwd, "decision", f"Record-only allow ({risk})")
+        if surfacing_mode in ("minimal", "gui"):
+            reason = f"{emoji} {BOLD}{CYAN}DELIBERATE{RESET} {BOLD}{color}[{risk}]{RESET}\n    {color}Record-only mode: logged and allowed (details in Deliberate pane){RESET}"
+        output = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": reason,
+                "additionalContext": context
+            }
+        }
+        broadcast_event("command_analyzed", session_id, {
+            "analysisId": analysis_id,
+            "command": command,
+            "cwd": cwd,
+            "risk": risk,
+            "explanation": explanation,
+            "evidence": evidence,
+            "consequences": destruction_consequences,
+            "workflowPatterns": workflow_patterns,
+            "backupPath": backup_path,
+            "autoApproval": auto_approval,
+            "recordOnly": True,
+            "permissionDecision": "allow"
+        })
+        print(json.dumps(output))
+        sys.exit(0)
 
     # Session deduplication - only for "ask" commands (not blocked ones)
     # This prevents showing the same warning twice in a session

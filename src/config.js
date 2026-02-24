@@ -41,6 +41,11 @@ const DEFAULT_CONFIG = {
   deliberate: {
     enabled: true,
 
+    // Record-only mode keeps analysis + logging active, but never asks/blocks
+    // commands in PreToolUse. This is useful for high-velocity sessions where
+    // the user wants full auditability without execution interruptions.
+    recordOnly: false,
+
     // Scoped "web search" for unknown commands/packages.
     // This is intentionally not arbitrary WebFetch. It only queries known
     // structured sources and produces evidence that can be shown to the user.

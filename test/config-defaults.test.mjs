@@ -25,6 +25,7 @@ test('default config exposes web search + auto approve settings', async () => {
     const loaded = cfg.loadConfig();
 
     assert.equal(loaded.deliberate.enabled, true);
+    assert.equal(loaded.deliberate.recordOnly, false);
     assert.equal(loaded.deliberate.webSearch.enabled, true);
     assert.deepEqual(loaded.deliberate.webSearch.sources, ['npm', 'pypi', 'github', 'gitlab']);
     assert.deepEqual(loaded.deliberate.autoApprove.patterns, []);

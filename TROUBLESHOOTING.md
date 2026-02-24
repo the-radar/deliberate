@@ -42,6 +42,20 @@ chmod +x ~/.claude/hooks/deliberate-*.py
 
 ## Server and pane
 
+### Need Deliberate in record-only mode (log, no blocks/approval prompts)
+
+Set this in `~/.deliberate/config.json`:
+
+```json
+{
+  "deliberate": {
+    "recordOnly": true
+  }
+}
+```
+
+Then restart Claude Code (or rerun `deliberate install` if needed) so the active hook process picks it up cleanly.
+
 ### Quick start command
 
 If you want one-command startup, use:

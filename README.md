@@ -129,6 +129,14 @@ Deliberate supports explicit always-allow patterns in:
 
 Matching commands are still analyzed and logged. Deliberate only auto-applies the policy when the command is not currently assessed as dangerous.
 
+If you need zero execution gating while keeping audit logs/explanations, enable record-only mode:
+
+```json
+{
+  "deliberate": { "recordOnly": true }
+}
+```
+
 ## GUI note
 
 The desktop GUI remains in-repo for future IDE/Antigravity harness workflows. For Claude Code/OpenCode, the TUI pane is the primary experience.

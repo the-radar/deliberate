@@ -40,6 +40,22 @@ class DeliberateCommandsHookTests(unittest.TestCase):
 
         self.assertEqual(matched, "browser-use")
 
+    def test_record_only_enabled_from_boolean_toggle(self):
+        original_loader = module._load_config
+        try:
+            module._load_config = lambda: {"deliberate": {"recordOnly": True}}
+            self.assertTrue(module.deliberate_record_only_enabled())
+        finally:
+            module._load_config = original_loader
+
+    def test_record_only_enabled_from_mode_string(self):
+        original_loader = module._load_config
+        try:
+            module._load_config = lambda: {"deliberate": {"mode": "record-only"}}
+            self.assertTrue(module.deliberate_record_only_enabled())
+        finally:
+            module._load_config = original_loader
+
 
 if __name__ == "__main__":
     unittest.main()

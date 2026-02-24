@@ -31,6 +31,9 @@ Polish first-run UX with one-command startup and onboarding walkthrough, while k
   - added startup/orchestration module `/Users/h4tch1ing/Documents/deliberate/src/start.js`
   - updated docs/install messaging to point users to `deliberate start`
   - added test coverage for start/onboarding helpers
+- Installer robustness fix:
+  - fixed symlink replacement for Antigravity/Gemini hook installs when stale/broken links already exist
+  - validated with fresh `deliberate install` run
 
 ### Now:
 - Hand off for external review.
@@ -44,8 +47,10 @@ Polish first-run UX with one-command startup and onboarding walkthrough, while k
 ## Working Set (files/ids/commands):
 - `/Users/h4tch1ing/Documents/deliberate/WORK/2026-02-21_remove-classifier_WORKFILE.md`
 - `/Users/h4tch1ing/Documents/deliberate/WORK/2026-02-23_onboarding-start-workflow_WORKFILE.md`
+- `/Users/h4tch1ing/Documents/deliberate/WORK/2026-02-23_install-symlink-eexist-fix_WORKFILE.md`
 - `/Users/h4tch1ing/Documents/deliberate/bin/cli.js`
 - `/Users/h4tch1ing/Documents/deliberate/src/start.js`
+- `/Users/h4tch1ing/Documents/deliberate/src/install.js`
 - `/Users/h4tch1ing/Documents/deliberate/src/server.js`
 - `/Users/h4tch1ing/Documents/deliberate/src/install.js`
 - `/Users/h4tch1ing/Documents/deliberate/src/config.js`

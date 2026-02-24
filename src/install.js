@@ -106,6 +106,27 @@ function ensureDir(dir) {
 }
 
 /**
+ * Remove an existing file or symlink path if present.
+ *
+ * Why this helper exists:
+ * - `fs.existsSync` returns false for broken symlinks.
+ * - We install many hooks as symlinks, so we must use lstat to detect and
+ *   remove stale entries reliably before creating new links.
+ *
+ * @param {string} targetPath
+ */
+function removeExistingPath(targetPath) {
+  try {
+    const stat = fs.lstatSync(targetPath);
+    if (stat.isFile() || stat.isSymbolicLink()) {
+      fs.unlinkSync(targetPath);
+    }
+  } catch (err) {
+    // Path missing is expected on first install.
+  }
+}
+
+/**
  * Install hook files to ~/.claude/hooks/
  * Uses symlinks on Unix (edits take effect immediately)
  * Uses copies on Windows (symlinks require admin)
@@ -238,7 +259,7 @@ function installAntigravityHooks() {
     const sourcePath = path.join(sourceDir, hook.src);
     const destPath = path.join(ANTIGRAVITY_HOOKS_DIR, hook.dest);
 
-    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+    removeExistingPath(destPath);
 
     if (IS_WINDOWS) {
       fs.copyFileSync(sourcePath, destPath);
@@ -294,7 +315,7 @@ function installGeminiHooks() {
     const sourcePath = path.join(sourceDir, hook.src);
     const destPath = path.join(GEMINI_HOOKS_DIR, hook.dest);
 
-    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+    removeExistingPath(destPath);
 
     if (IS_WINDOWS) {
       fs.copyFileSync(sourcePath, destPath);

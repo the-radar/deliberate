@@ -49,7 +49,7 @@ Requirements:
 - [x] Implementation in progress
 - [x] Runtime validated
 - [x] Docs validated
-- [ ] Commit completed
+- [x] Commit completed
 
 ## Open questions
 - Should TUI header explicitly show `record-only` as an operating mode label?

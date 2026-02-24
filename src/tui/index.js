@@ -63,6 +63,16 @@ function truncate(value, max) {
   return `${str.slice(0, Math.max(0, max - 1))}…`;
 }
 
+function firstExplanationLine(value) {
+  if (typeof value !== 'string') return '';
+  const compact = value
+    .replace(/\x1b\[[0-9;]*m/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  return compact || '';
+}
+
 function formatClock(iso) {
   try {
     const date = iso ? new Date(iso) : new Date();
@@ -134,21 +144,29 @@ function decisionLabel(event) {
 
 function titleOf(event) {
   const type = String(event?.type || '');
+  const explanation = firstExplanationLine(event?.data?.explanation);
   if (type === 'command_analyzed') {
     const cmd = typeof event?.data?.command === 'string' ? event.data.command : '(command)';
     const decision = decisionOf(event);
-    if (decision === 'ask') return `Needs approval: ${cmd}`;
-    if (decision === 'block') return `Blocked: ${cmd}`;
+    if (decision === 'ask') {
+      if (explanation) return `Needs approval: ${explanation} · ${cmd}`;
+      return `Needs approval: ${cmd}`;
+    }
+    if (decision === 'block') {
+      if (explanation) return `Blocked: ${explanation} · ${cmd}`;
+      return `Blocked: ${cmd}`;
+    }
     if (decision === 'allow') {
       const pattern = String(event?.data?.autoApproval?.pattern || '').trim();
-      if (pattern) return `Allowed by policy (${pattern}): ${cmd}`;
-      return `Allowed: ${cmd}`;
+      const base = pattern ? `Allowed by policy (${pattern}): ${cmd}` : `Allowed: ${cmd}`;
+      return explanation ? `${base} — ${explanation}` : base;
     }
-    return cmd;
+    return explanation ? `${cmd} — ${explanation}` : cmd;
   }
   if (type === 'command_post_analysis') {
     const cmd = typeof event?.data?.command === 'string' ? event.data.command : '(command)';
-    return `Executed: ${cmd}`;
+    const base = `Executed: ${cmd}`;
+    return explanation ? `${base} — ${explanation}` : base;
   }
   if (type === 'command_analysis_progress') {
     const msg = typeof event?.data?.message === 'string' ? event.data.message : 'Analyzing…';
@@ -156,7 +174,8 @@ function titleOf(event) {
     return cmd ? `${msg}: ${cmd}` : msg;
   }
   if (type === 'file_change_analyzed') {
-    return event?.data?.relativePath || event?.data?.filePath || '(file change)';
+    const file = event?.data?.relativePath || event?.data?.filePath || '(file change)';
+    return explanation ? `${explanation} · ${file}` : file;
   }
   if (type === 'policy_update') {
     const action = String(event?.data?.action || 'policy');
@@ -202,6 +221,18 @@ function detailsForEvent(event) {
     lines.push(`decision: ${decision}`);
   }
 
+  if (typeof data.explanation === 'string' && data.explanation.trim()) {
+    const summary = firstExplanationLine(data.explanation);
+    lines.push('');
+    lines.push(`explanation: ${summary}`);
+    const full = data.explanation.trim();
+    if (summary && full !== summary) {
+      lines.push('');
+      lines.push('full explanation:');
+      lines.push(full);
+    }
+  }
+
   if (decision === 'ask') {
     lines.push('');
     lines.push('what to do now:');
@@ -220,12 +251,6 @@ function detailsForEvent(event) {
     lines.push('');
     lines.push('file:');
     lines.push(String(data.relativePath || data.filePath));
-  }
-
-  if (typeof data.explanation === 'string' && data.explanation.trim()) {
-    lines.push('');
-    lines.push('why Deliberate flagged this:');
-    lines.push(data.explanation.trim());
   }
 
   if (type === 'command_analysis_progress') {
@@ -590,6 +615,7 @@ export async function runTui(options = {}) {
 
   const helpText = () => [
     '↑/↓ navigate',
+    'PgUp/PgDn details',
     'v review/history',
     'a all',
     'n next session',
@@ -760,6 +786,16 @@ export async function runTui(options = {}) {
     selectedIndex = 0;
     renderAll({ keepSelection: false });
     setStatus('reloaded');
+  });
+
+  screen.key(['pagedown'], () => {
+    details.scroll(Math.max(5, Math.floor((Number(details.height) || 10) / 2)));
+    screen.render();
+  });
+
+  screen.key(['pageup'], () => {
+    details.scroll(-Math.max(5, Math.floor((Number(details.height) || 10) / 2)));
+    screen.render();
   });
 
   screen.key(['S'], async () => {

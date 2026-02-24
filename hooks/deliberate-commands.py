@@ -1862,33 +1862,6 @@ def should_skip_command(command: str, skip_set: set) -> bool:
     return True
 
 
-def get_token_from_keychain():
-    # type: () -> str | None
-    """Get Claude Code OAuth token from macOS Keychain."""
-    try:
-        result = subprocess.run(
-            ["/usr/bin/security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode != 0:
-            return None
-
-        credentials_json = result.stdout.strip()
-        if not credentials_json:
-            return None
-
-        data = json.loads(credentials_json)
-        token = data.get("claudeAiOauth", {}).get("accessToken")
-
-        if token and token.startswith("sk-ant-oat01-"):
-            return token
-        return None
-    except Exception:
-        return None
-
-
 def load_llm_config() -> dict | None:
     """Load LLM configuration from config file or keychain."""
     if LLM_MODE == "manual":
@@ -1899,11 +1872,10 @@ def load_llm_config() -> dict | None:
     if not provider:
         return None
 
+    # For claude-subscription we intentionally prefer Claude SDK's own auth
+    # resolution (same source as `claude auth status`) unless the user has
+    # explicitly configured an override token in Deliberate config.
     api_key = llm.get("apiKey")
-    if provider == "claude-subscription":
-        keychain_token = get_token_from_keychain()
-        if keychain_token:
-            api_key = keychain_token
 
     return {
         "provider": provider,
@@ -1959,6 +1931,74 @@ def is_dangerous_command(command: str) -> bool:
     return any(pattern.lower() in cmd_lower for pattern in DANGEROUS_PATTERNS)
 
 
+def build_local_rule_reason(command: str, risk: str) -> str:
+    """Generate a human-meaningful explanation for local rule decisions.
+
+    This runs when we do not have an LLM explanation available yet. The goal is
+    to avoid vague messages like "matched dangerous pattern" and instead tell
+    the user what the command does and why it matters.
+    """
+    cmd = command.strip()
+    lower = cmd.lower()
+
+    if "curl | sh" in lower or "curl | bash" in lower or "wget | sh" in lower or "wget | bash" in lower:
+        return (
+            "This command downloads remote content and pipes it directly into a shell. "
+            "That executes unreviewed code immediately, so treat it as high risk."
+        )
+
+    if "git reset --hard" in lower:
+        return (
+            "This command discards local tracked changes (`git reset --hard`). "
+            "Uncommitted edits will be lost."
+        )
+
+    if "git push --force" in lower or "git push -f" in lower:
+        return (
+            "This command force-pushes rewritten history. It can overwrite remote commits "
+            "and disrupt collaborators."
+        )
+
+    if "rm -rf" in lower or re.search(r"\brm\s+(-[a-z]*r[a-z]*)\b", lower):
+        targets = extract_affected_paths(command)
+        target_note = ""
+        if targets:
+            target_note = f" Targets: {', '.join(targets[:3])}."
+            if len(targets) > 3:
+                target_note = f"{target_note[:-1]} (+{len(targets) - 3} more)."
+        return (
+            "This command recursively and forcefully deletes files/directories (`rm -rf`). "
+            "Deleted content is not moved to Trash and can be unrecoverable."
+            f"{target_note}"
+        )
+
+    if "chmod 777" in lower:
+        return (
+            "This command grants read/write/execute permissions to everyone (`chmod 777`). "
+            "That can expose sensitive files and increase abuse risk."
+        )
+
+    if lower.startswith("sudo ") or " sudo " in lower:
+        return (
+            "This command runs with elevated privileges (`sudo`), so mistakes can modify "
+            "protected system files or settings."
+        )
+
+    if risk == "SAFE":
+        if lower.startswith(("ls", "ll", "la", "dir", "tree")):
+            return "This is a read-only directory listing command. It does not modify files."
+        if "--version" in lower:
+            return "This command only prints tool version information (read-only)."
+        if lower.startswith(("git status", "git log", "git diff", "git branch", "git show")):
+            return "This is a read-only Git inspection command."
+        return "This command matched a read-only safe pattern."
+
+    if risk == "DANGEROUS":
+        return "This command matched a destructive or high-impact local risk pattern."
+
+    return "Review this command manually before execution."
+
+
 def assess_command_risk_by_rules(command: str) -> dict | None:
     """Lightweight local pre-assessment used before LLM explanation.
 
@@ -1966,9 +2006,17 @@ def assess_command_risk_by_rules(command: str) -> dict | None:
     surfacing obvious safe/dangerous patterns.
     """
     if is_safe_command(command):
-        return {"risk": "SAFE", "reason": "Matched local safe command pattern", "source": "rules"}
+        return {
+            "risk": "SAFE",
+            "reason": build_local_rule_reason(command, "SAFE"),
+            "source": "rules"
+        }
     if is_dangerous_command(command):
-        return {"risk": "DANGEROUS", "reason": "Matched local dangerous command pattern", "source": "rules"}
+        return {
+            "risk": "DANGEROUS",
+            "reason": build_local_rule_reason(command, "DANGEROUS"),
+            "source": "rules"
+        }
     return None
 
 
@@ -2175,9 +2223,10 @@ import json
 import asyncio
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
-# Set OAuth token from keychain
+# Optional override token. If not provided, Claude SDK uses local Claude auth.
 token = {repr(llm_config["api_key"])}
-os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
+if token:
+    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
 
 async def main():
     # Create SDK client - disallow all tools except WebSearch (for verifying commands)

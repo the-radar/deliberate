@@ -99,6 +99,19 @@ Run install again and configure provider:
 deliberate install
 ```
 
+If `~/.deliberate/config.json` has `"llm": { "provider": null }`, set it back to `claude-subscription` (or your chosen provider) and re-run install.
+
+### API error 401 / OAuth token expired
+
+If explanations suddenly downgrade or you see auth errors, refresh Claude auth:
+
+```bash
+claude auth status
+claude auth login
+```
+
+Then restart Claude Code so hooks pick up fresh auth context.
+
 ### LLM/network unavailable
 
 Deliberate falls back to local rule hints and still preserves review flow. You can continue without full LLM detail.

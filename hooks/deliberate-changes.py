@@ -233,34 +233,6 @@ def extract_content(tool_name: str, tool_input: dict) -> tuple:
     return "", "", "", None, None
 
 
-def get_token_from_keychain():
-    # type: () -> str | None
-    """Get Claude Code OAuth token from macOS Keychain."""
-    try:
-        import subprocess
-        result = subprocess.run(
-            ["/usr/bin/security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode != 0:
-            return None
-
-        credentials_json = result.stdout.strip()
-        if not credentials_json:
-            return None
-
-        data = json.loads(credentials_json)
-        token = data.get("claudeAiOauth", {}).get("accessToken")
-
-        if token and token.startswith("sk-ant-oat01-"):
-            return token
-        return None
-    except Exception:
-        return None
-
-
 def load_llm_config():
     # type: () -> dict | None
     """Load LLM configuration from ~/.deliberate/config.json or keychain"""
@@ -274,12 +246,9 @@ def load_llm_config():
                 if not provider:
                     return None
 
-                # For claude-subscription, get fresh token from keychain
+                # For claude-subscription we prefer Claude SDK's own auth
+                # resolution unless Deliberate config explicitly sets apiKey.
                 api_key = llm.get("apiKey")
-                if provider == "claude-subscription":
-                    keychain_token = get_token_from_keychain()
-                    if keychain_token:
-                        api_key = keychain_token
 
                 return {
                     "provider": provider,
@@ -461,9 +430,10 @@ import json
 import asyncio
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
-# Set OAuth token from keychain
+# Optional override token. If omitted, Claude SDK uses existing Claude auth.
 token = {repr(llm_config["api_key"])}
-os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
+if token:
+    os.environ["CLAUDE_CODE_OAUTH_TOKEN"] = token
 
 async def main():
     # Create SDK client - disallow all tools (just need text response)

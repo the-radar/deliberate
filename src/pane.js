@@ -75,7 +75,8 @@ function pickSessionForCwd(events, cwd) {
 
 export async function openPane(options = {}) {
   const percent = Number(options.percent) > 0 ? Math.min(Math.max(Number(options.percent), 10), 80) : 30;
-  const direction = options.direction === 'left' ? 'left' : 'right';
+  const rawDirection = String(options.direction || '').toLowerCase();
+  const direction = ['left', 'right', 'top', 'bottom'].includes(rawDirection) ? rawDirection : 'bottom';
 
   const resolved = { ...options };
 
@@ -91,10 +92,16 @@ export async function openPane(options = {}) {
   const tui = buildTuiCommandArgs(resolved);
 
   if (isWezTerm()) {
+    const weztermDirectionFlag = (
+      direction === 'left' ? '--left'
+        : direction === 'right' ? '--right'
+          : direction === 'top' ? '--top'
+            : '--bottom'
+    );
     const args = [
       'cli',
       'split-pane',
-      direction === 'left' ? '--left' : '--right',
+      weztermDirectionFlag,
       '--percent',
       String(percent),
       '--',
@@ -110,14 +117,16 @@ export async function openPane(options = {}) {
   }
 
   if (isTmux()) {
+    const splitAxisFlag = (direction === 'left' || direction === 'right') ? '-h' : '-v';
+    const beforeFlag = (direction === 'left' || direction === 'top') ? '-b' : '';
     const args = [
       'split-window',
-      '-h',
+      splitAxisFlag,
       // Don't steal focus. This is critical for Claude Code UX, otherwise the
       // newly-created Deliberate pane becomes active and it feels like it
       // "captures" all keyboard input.
       '-d',
-      direction === 'left' ? '-b' : '',
+      beforeFlag,
       '-p',
       String(percent),
       tui.cmd,

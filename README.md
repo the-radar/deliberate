@@ -77,6 +77,9 @@ Typical workflow (recommended):
 deliberate start
 ```
 
+Default pane placement is now bottom split (less invasive than right-side).  
+You can override with `--direction top|right|left|bottom`.
+
 Manual equivalent:
 
 ```bash

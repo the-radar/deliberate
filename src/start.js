@@ -161,7 +161,7 @@ export function renderOnboardingWalkthrough() {
     '',
     'Fast start:',
     '  - Run `deliberate start` to start server + open pane.',
-    '  - Keep coding in Claude Code, review in the Deliberate pane.',
+    '  - Keep coding in Claude Code, review in the Deliberate pane below.',
     '',
     'Core keys in the pane:',
     '  - v: toggle review queue/history',

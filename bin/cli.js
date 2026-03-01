@@ -40,8 +40,8 @@ program
 program
   .command('start')
   .description('One-command startup: ensure server is running and open Deliberate pane')
-  .option('--percent <percent>', 'Pane width percentage (10-80)', '30')
-  .option('--direction <dir>', 'Split direction: right or left', 'right')
+  .option('--percent <percent>', 'Pane size percentage (10-80)', '30')
+  .option('--direction <dir>', 'Split direction: bottom, top, right, or left', 'bottom')
   .option('--all', 'Show all sessions (default is latest)', false)
   .option('--session <id>', 'Filter to a specific session id', null)
   .option('--no-follow', 'Do not auto-follow new events')
@@ -169,8 +169,8 @@ program
 program
   .command('pane')
   .description('Open the Deliberate TUI in a split pane when supported (WezTerm/tmux)')
-  .option('--percent <percent>', 'Pane width percentage (10-80)', '30')
-  .option('--direction <dir>', 'Split direction: right or left', 'right')
+  .option('--percent <percent>', 'Pane size percentage (10-80)', '30')
+  .option('--direction <dir>', 'Split direction: bottom, top, right, or left', 'bottom')
   .option('--all', 'Show all sessions (default is latest)', false)
   .option('--session <id>', 'Filter to a specific session id', null)
   .option('--no-follow', 'Do not auto-follow new events')

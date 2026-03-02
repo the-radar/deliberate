@@ -18,7 +18,7 @@ Requirements:
 - [x] Make TUI header/list/details wording friendlier and explanation-first.
 - [x] Add in-TUI `e` toggle for explain-everything mode.
 - [x] Validate build/tests and runtime behavior.
-- [ ] Update docs and commit.
+- [x] Update docs and commit.
 
 ## System context
 - `/Users/h4tch1ing/Documents/deliberate/src/config.js`
@@ -46,4 +46,4 @@ Requirements:
 - [x] Workfile created
 - [x] Implementation in progress
 - [x] Validation complete
-- [ ] Commit complete
+- [x] Commit complete

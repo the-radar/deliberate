@@ -99,6 +99,7 @@ The TUI opens in **review queue** mode by default so pending approvals stay fron
 
 - `v` toggle review queue/history
 - `d` discuss selected item in embedded chat
+- `e` explain-everything toggle (include low-risk commands too)
 - `s` don’t flag exact command
 - `b` block command pattern
 - `w` guided always-allow policy flow
@@ -137,6 +138,14 @@ If you need zero execution gating while keeping audit logs/explanations, enable 
 ```json
 {
   "deliberate": { "recordOnly": true }
+}
+```
+
+If you want Deliberate to narrate nearly every command (including low-risk ones), enable:
+
+```json
+{
+  "deliberate": { "explainEverything": true }
 }
 ```
 

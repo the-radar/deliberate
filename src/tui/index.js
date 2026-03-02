@@ -136,7 +136,7 @@ function decisionLabel(event) {
   if (type === 'policy_update') return 'policy';
 
   const decision = decisionOf(event);
-  if (decision === 'ask') return 'needs approval';
+  if (decision === 'ask') return 'needs review';
   if (decision === 'allow') return 'allowed';
   if (decision === 'block') return 'blocked';
   return 'event';
@@ -149,8 +149,8 @@ function titleOf(event) {
     const cmd = typeof event?.data?.command === 'string' ? event.data.command : '(command)';
     const decision = decisionOf(event);
     if (decision === 'ask') {
-      if (explanation) return `Needs approval: ${explanation} · ${cmd}`;
-      return `Needs approval: ${cmd}`;
+      if (explanation) return `Review: ${explanation} · ${cmd}`;
+      return `Review: ${cmd}`;
     }
     if (decision === 'block') {
       if (explanation) return `Blocked: ${explanation} · ${cmd}`;
@@ -210,21 +210,17 @@ function detailsForEvent(event) {
   const data = event?.data || {};
   const risk = riskOf(event);
   const decision = decisionOf(event);
+  const status = decisionLabel(event);
+  const title = titleOf(event);
 
-  lines.push(`review status: ${decisionLabel(event)}`);
-  lines.push(`risk: ${risk}`);
-  lines.push(`time: ${String(event?.timestamp || '')}`);
-  lines.push(`session: ${String(event?.sessionId || '')}`);
-  lines.push(`event type: ${type}`);
-
-  if (decision) {
-    lines.push(`decision: ${decision}`);
-  }
+  lines.push(`summary: ${title}`);
+  lines.push(`status: ${status} · risk: ${risk}`);
 
   if (typeof data.explanation === 'string' && data.explanation.trim()) {
     const summary = firstExplanationLine(data.explanation);
     lines.push('');
-    lines.push(`explanation: ${summary}`);
+    lines.push('why Deliberate is saying this:');
+    lines.push(summary);
     const full = data.explanation.trim();
     if (summary && full !== summary) {
       lines.push('');
@@ -235,10 +231,9 @@ function detailsForEvent(event) {
 
   if (decision === 'ask') {
     lines.push('');
-    lines.push('what to do now:');
-    lines.push('- Review command, explanation, and evidence below.');
-    lines.push('- Approve or deny in Claude Code prompt.');
-    lines.push('- Use "d" to discuss, "w" for guided always-allow, "b" to block pattern.');
+    lines.push('next step:');
+    lines.push('- Review this action in Claude Code and choose yes/no.');
+    lines.push('- Press "d" if you want Deliberate to explain or suggest a safer pattern.');
   }
 
   if (typeof data.command === 'string') {
@@ -327,6 +322,13 @@ function detailsForEvent(event) {
       lines.push(data.note.trim());
     }
   }
+
+  lines.push('');
+  lines.push('technical details:');
+  lines.push(`session: ${String(event?.sessionId || '')}`);
+  lines.push(`time: ${String(event?.timestamp || '')}`);
+  lines.push(`event type: ${type}`);
+  if (decision) lines.push(`decision: ${decision}`);
 
   return lines.join('\n');
 }
@@ -524,6 +526,8 @@ export async function runTui(options = {}) {
     serverOk: false,
     statusMessage: '',
     deliberateOn,
+    recordOnly: config.deliberate?.recordOnly === true,
+    explainEverything: config.deliberate?.explainEverything === true,
     pendingCount: 0
   };
 
@@ -616,7 +620,7 @@ export async function runTui(options = {}) {
   const helpText = () => [
     '↑/↓ navigate',
     'PgUp/PgDn details',
-    'v review/history',
+    'v review/timeline',
     'a all',
     'n next session',
     'f follow',
@@ -624,6 +628,7 @@ export async function runTui(options = {}) {
     'w always allow',
     'b block',
     'd discuss',
+    'e explain-all',
     'x toggle',
     'S start server',
     'q quit'
@@ -641,12 +646,14 @@ export async function runTui(options = {}) {
     const counts = buildCounts(filtered);
     const serverDot = state.serverOk ? '●' : '○';
     const followLabel = state.follow ? 'follow' : 'paused';
-    const enabledLabel = state.deliberateOn ? 'on' : 'off';
-    const viewLabel = state.viewMode === 'review' ? 'review' : 'history';
+    const enabledLabel = state.deliberateOn ? 'On' : 'Off';
+    const viewLabel = state.viewMode === 'review' ? 'Needs review' : 'Timeline';
+    const behaviorLabel = state.recordOnly ? 'record-only' : 'approval mode';
+    const coverageLabel = state.explainEverything ? 'everything' : 'high-signal';
 
-    const line1 = `Deliberate (${enabledLabel})  mode=${viewLabel}  pending=${state.pendingCount}  session=${sessionLabel}`;
-    const line2 = `total=${counts.total}  safe=${counts.safe}  mod=${counts.moderate}  danger=${counts.dangerous}`;
-    const line3 = `server=${serverBaseUrl}  ${serverDot}  ${followLabel}`;
+    const line1 = `Deliberate ${enabledLabel} • ${viewLabel} • waiting ${state.pendingCount} • session ${sessionLabel}`;
+    const line2 = `seen ${counts.total} • safe ${counts.safe} • moderate ${counts.moderate} • dangerous ${counts.dangerous}`;
+    const line3 = `mode ${behaviorLabel} • coverage ${coverageLabel} • server ${serverDot} • ${followLabel}`;
     const line4 = state.statusMessage ? state.statusMessage : '';
 
     header.setContent([line1, line2, line3, line4].join('\n'));
@@ -674,7 +681,7 @@ export async function runTui(options = {}) {
     const width = typeof list.width === 'number' ? list.width : screen.width;
     const items = filtered.map((ev) => summarizeEvent(ev, width - 6));
     list.setItems(items);
-    list.setLabel(` ${state.viewMode === 'review' ? 'review queue' : 'history'} `);
+    list.setLabel(` ${state.viewMode === 'review' ? 'what needs review' : 'timeline'} `);
 
     if (!keepSelection) {
       selectedIndex = Math.max(0, items.length - 1);
@@ -769,7 +776,7 @@ export async function runTui(options = {}) {
   screen.key(['v'], () => {
     state.viewMode = state.viewMode === 'review' ? 'history' : 'review';
     selectedIndex = 0;
-    setStatus(state.viewMode === 'review' ? 'review queue' : 'history view');
+    setStatus(state.viewMode === 'review' ? 'showing items that need review' : 'showing full timeline');
     renderAll({ keepSelection: false });
   });
 
@@ -864,11 +871,33 @@ export async function runTui(options = {}) {
           cwd: process.cwd()
         }
       });
-      setStatus(next ? 'deliberate enabled' : 'deliberate disabled');
+      setStatus(next ? 'Deliberate turned on' : 'Deliberate turned off');
       renderHeader();
       screen.render();
     } catch {
       setStatus('toggle failed');
+    }
+  });
+
+  screen.key(['e'], () => {
+    try {
+      const next = !state.explainEverything;
+      config = patchConfig({ deliberate: { explainEverything: next } });
+      state.explainEverything = next;
+      appendEventLog({
+        type: 'policy_update',
+        timestamp: new Date().toISOString(),
+        sessionId: state.sessionId || 'manual',
+        data: {
+          action: next ? 'explain_everything_on' : 'explain_everything_off',
+          cwd: process.cwd()
+        }
+      });
+      setStatus(next ? 'Explain-everything is now ON' : 'Explain-everything is now OFF');
+      renderHeader();
+      screen.render();
+    } catch {
+      setStatus('could not toggle explain-everything');
     }
   });
 

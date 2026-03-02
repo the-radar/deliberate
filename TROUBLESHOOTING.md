@@ -56,6 +56,20 @@ Set this in `~/.deliberate/config.json`:
 
 Then restart Claude Code (or rerun `deliberate install` if needed) so the active hook process picks it up cleanly.
 
+### Need Deliberate to explain every command (not just high-signal)
+
+Set this in `~/.deliberate/config.json`:
+
+```json
+{
+  "deliberate": {
+    "explainEverything": true
+  }
+}
+```
+
+You can also toggle this live inside the TUI with `e`.
+
 ### Quick start command
 
 If you want one-command startup, use:

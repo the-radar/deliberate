@@ -1148,6 +1148,18 @@ def deliberate_record_only_enabled() -> bool:
     return False
 
 
+def deliberate_explain_everything_enabled() -> bool:
+    """When enabled, disable default command skipping for full narration."""
+    try:
+        deliberate = _load_config().get("deliberate", {}) or {}
+        value = deliberate.get("explainEverything")
+        if isinstance(value, bool):
+            return value
+    except Exception:
+        pass
+    return False
+
+
 def load_dedup_config() -> bool:
     """Load deduplication config - returns True if dedup is enabled (default)."""
     return _load_config().get("deduplication", {}).get("enabled", True)
@@ -1651,7 +1663,9 @@ DEFAULT_SAFE_COMMANDS = {
 
 def load_skip_commands() -> set:
     """Load skip commands list from config, with defaults."""
-    skip_set = DEFAULT_SKIP_COMMANDS.copy()
+    skip_set = set()
+    if not deliberate_explain_everything_enabled():
+        skip_set = DEFAULT_SKIP_COMMANDS.copy()
     skip_config = _load_config().get("skipCommands", {})
 
     # Add user-configured commands (by basename)
@@ -2399,6 +2413,7 @@ def main():
         broadcast_progress(session_id, analysis_id, command, cwd, "web_search_done", "No evidence found")
 
     record_only_mode = deliberate_record_only_enabled()
+    explain_everything_mode = deliberate_explain_everything_enabled()
 
     # User custom blocklist, hard stop before any heavier analysis.
     block_match = custom_blocklist_match(command, load_custom_blocklist())
@@ -2556,7 +2571,7 @@ def main():
 
     # SAFE commands: auto-allow, PostToolUse will show info after execution
     # UNLESS a workflow pattern was detected - then we still need to warn
-    if risk == "SAFE" and not workflow_patterns:
+    if risk == "SAFE" and not workflow_patterns and not explain_everything_mode:
         broadcast_event("command_analyzed", session_id, {
             "analysisId": analysis_id,
             "command": command,
@@ -2679,6 +2694,35 @@ def main():
         context += destruction_warning
     if backup_notice:
         context += backup_notice
+
+    # Explain-everything mode keeps safe commands visible with explicit allow
+    # output instead of silently auto-allowing with no terminal context.
+    if explain_everything_mode and risk == "SAFE" and not workflow_patterns:
+        broadcast_progress(session_id, analysis_id, command, cwd, "decision", "Explain-everything allow (SAFE)")
+        output = {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "permissionDecisionReason": reason,
+                "additionalContext": context
+            }
+        }
+        broadcast_event("command_analyzed", session_id, {
+            "analysisId": analysis_id,
+            "command": command,
+            "cwd": cwd,
+            "risk": risk,
+            "explanation": explanation,
+            "evidence": evidence,
+            "consequences": destruction_consequences,
+            "workflowPatterns": workflow_patterns,
+            "backupPath": backup_path,
+            "autoApproval": auto_approval,
+            "explainEverything": True,
+            "permissionDecision": "allow"
+        })
+        print(json.dumps(output))
+        sys.exit(0)
 
     # Record-only mode: keep analysis + telemetry but never block/ask.
     if record_only_mode:

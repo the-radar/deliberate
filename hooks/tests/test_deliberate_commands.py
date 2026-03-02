@@ -56,6 +56,32 @@ class DeliberateCommandsHookTests(unittest.TestCase):
         finally:
             module._load_config = original_loader
 
+    def test_explain_everything_enabled_from_boolean_toggle(self):
+        original_loader = module._load_config
+        try:
+            module._load_config = lambda: {"deliberate": {"explainEverything": True}}
+            self.assertTrue(module.deliberate_explain_everything_enabled())
+        finally:
+            module._load_config = original_loader
+
+    def test_load_skip_commands_uses_defaults_when_explain_everything_off(self):
+        original_loader = module._load_config
+        try:
+            module._load_config = lambda: {"deliberate": {"explainEverything": False}, "skipCommands": {}}
+            skip = module.load_skip_commands()
+            self.assertIn("ls", skip)
+        finally:
+            module._load_config = original_loader
+
+    def test_load_skip_commands_disables_defaults_when_explain_everything_on(self):
+        original_loader = module._load_config
+        try:
+            module._load_config = lambda: {"deliberate": {"explainEverything": True}, "skipCommands": {}}
+            skip = module.load_skip_commands()
+            self.assertNotIn("ls", skip)
+        finally:
+            module._load_config = original_loader
+
 
 if __name__ == "__main__":
     unittest.main()

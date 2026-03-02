@@ -46,6 +46,10 @@ const DEFAULT_CONFIG = {
     // the user wants full auditability without execution interruptions.
     recordOnly: false,
 
+    // Explain-everything mode disables the default trivial command skip list so
+    // Deliberate can narrate the full command stream in-session.
+    explainEverything: false,
+
     // Scoped "web search" for unknown commands/packages.
     // This is intentionally not arbitrary WebFetch. It only queries known
     // structured sources and produces evidence that can be shown to the user.

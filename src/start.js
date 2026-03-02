@@ -167,6 +167,7 @@ export function renderOnboardingWalkthrough() {
     '  - v: toggle review queue/history',
     '  - d: discuss selected item',
     '  - w: guided always-allow policy flow',
+    '  - e: toggle explain-everything mode',
     '  - s: do not flag exact command',
     '  - b: block command pattern',
     '  - x: disable/enable Deliberate globally',

@@ -81,7 +81,11 @@ const DEFAULT_CONFIG = {
   },
   // Local Deliberate server for broadcast/config/chat transport.
   server: {
-    port: 8765
+    port: 8765,
+    // How long the server may sit idle (no WS clients, no live pane locks)
+    // before exiting itself. Default 15s. Set to 0 to keep the server alive
+    // forever (useful for shared dev environments).
+    idleExitMs: 15000
   },
   deduplication: {
     enabled: true  // When true, don't show same warning twice per session

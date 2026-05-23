@@ -12,8 +12,106 @@ import { createBroadcaster } from './ws-broadcaster.js';
 import { loadConfig, patchConfig, addSkipCommand, addCustomBlock, addAutoApprovePattern } from './config.js';
 import { handleChatSse } from './chat-handler.js';
 import { appendEventLog, cleanupOldEventLogs, readRecentEvents } from './event-log.js';
+import { isPidAlive } from './cleanup.js';
 
 const DEFAULT_PORT = 8765;
+const DEFAULT_IDLE_EXIT_MS = 15_000;
+const DEFAULT_IDLE_CHECK_INTERVAL_MS = 2_500;
+const DEFAULT_STARTUP_GRACE_MS = 30_000;
+
+/**
+ * Count live pane lock files in ~/.deliberate/panes/.
+ *
+ * A lock is "live" when its recorded PID is still running. Locks without a PID
+ * (legacy) are conservatively counted as live so we never auto-exit on a
+ * legitimate session whose pane is alive but pre-dates PID tracking.
+ *
+ * @returns {number}
+ */
+function countLivePaneLocks() {
+  const dir = path.join(os.homedir(), '.deliberate', 'panes');
+  let entries;
+  try {
+    entries = fs.readdirSync(dir);
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return 0;
+    return 0;
+  }
+  let alive = 0;
+  for (const name of entries) {
+    if (!name.startsWith('pane-started-') || !name.endsWith('.json')) continue;
+    let pidRaw;
+    try {
+      const data = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
+      pidRaw = data && data.pid;
+    } catch {
+      // Treat unreadable locks as not-alive to avoid blocking exit on garbage.
+      continue;
+    }
+    const pid = Number.isFinite(pidRaw) ? pidRaw : null;
+    // Legacy locks (no pid) count as alive — caller can clear them via
+    // `deliberate cleanup` once they confirm no pane is still attached.
+    if (pid === null || isPidAlive(pid)) alive += 1;
+  }
+  return alive;
+}
+
+/**
+ * Watch the server's idle state and exit gracefully when no panes or WS
+ * clients remain. Returns a stop function for use in tests.
+ *
+ * @param {{
+ *   getClientCount: () => number,
+ *   idleExitMs: number,
+ *   intervalMs?: number,
+ *   startupGraceMs?: number,
+ *   onExit?: (info: { reason: string }) => void
+ * }} options
+ * @returns {() => void}
+ */
+export function startIdleExitWatchdog(options) {
+  const {
+    getClientCount,
+    idleExitMs,
+    intervalMs = DEFAULT_IDLE_CHECK_INTERVAL_MS,
+    startupGraceMs = DEFAULT_STARTUP_GRACE_MS,
+    onExit = ({ reason }) => {
+      console.log(`[Server] idle for ${idleExitMs}ms (${reason}), shutting down`);
+      process.exit(0);
+    }
+  } = options;
+
+  if (!Number.isFinite(idleExitMs) || idleExitMs <= 0) {
+    // Disabled — escape hatch for "keep server alive forever" deployments.
+    return () => {};
+  }
+
+  const startedAt = Date.now();
+  let idleSince = null;
+  const handle = setInterval(() => {
+    if (Date.now() - startedAt < startupGraceMs) return;
+
+    const clients = getClientCount();
+    const panes = countLivePaneLocks();
+    const idle = clients === 0 && panes === 0;
+
+    if (!idle) {
+      idleSince = null;
+      return;
+    }
+    if (idleSince === null) {
+      idleSince = Date.now();
+      return;
+    }
+    if (Date.now() - idleSince >= idleExitMs) {
+      clearInterval(handle);
+      onExit({ reason: `clients=${clients} panes=${panes}` });
+    }
+  }, intervalMs);
+
+  if (handle && typeof handle.unref === 'function') handle.unref();
+  return () => clearInterval(handle);
+}
 
 function sanitizeConfigForUi(config) {
   const llm = config.llm || {};
@@ -256,6 +354,23 @@ export async function startServer(port = DEFAULT_PORT, options = {}) {
       console.log('  POST /api/config/auto-approve - Add auto-approve pattern');
       console.log('  POST /api/chat         - Command chat SSE');
       console.log('  WS   /ws               - Real-time event stream');
+
+      // Auto-exit when no panes / WS clients remain. Escape hatch:
+      // `server.idleExitMs: 0` in config keeps the server alive forever.
+      if (options.idleExit !== false) {
+        const cfg = (loadConfig() || {}).server || {};
+        const idleExitMs = Number.isFinite(cfg.idleExitMs)
+          ? cfg.idleExitMs
+          : DEFAULT_IDLE_EXIT_MS;
+        startIdleExitWatchdog({
+          getClientCount: () =>
+            typeof broadcaster.getActiveClientCount === 'function'
+              ? broadcaster.getActiveClientCount()
+              : 0,
+          idleExitMs
+        });
+      }
+
       resolve(server);
     });
 

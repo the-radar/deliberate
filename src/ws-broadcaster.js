@@ -173,6 +173,23 @@ export function createBroadcaster(options = {}) {
     },
 
     /**
+     * Return the current number of open WS clients. Used by the idle watchdog
+     * in src/server.js to decide whether the server can shut itself down when
+     * no panes remain connected.
+     *
+     * @returns {number}
+     */
+    getActiveClientCount() {
+      if (!wss) return 0;
+      let alive = 0;
+      for (const client of wss.clients) {
+        // readyState 1 === OPEN per the WebSocket spec.
+        if (client.readyState === 1) alive += 1;
+      }
+      return alive;
+    },
+
+    /**
      * Close underlying WS server.
      */
     close() {

@@ -13,6 +13,7 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { execSync } from 'child_process';
+import { existsSync } from 'fs';
 import { LLM_PROVIDERS, setLLMProvider, isLLMConfigured, getConfigFile } from './config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -75,6 +76,14 @@ const HOOKS = [
     // Claude Code fires SessionStart for multiple lifecycle reasons
     // (startup/resume/compact). We only want to auto-open panes on startup.
     matcher: 'startup',
+    timeout: 5
+  },
+
+  // SessionEnd: terminate the per-session Deliberate pane and clear its lock
+  {
+    source: 'deliberate-session-end.py',
+    dest: 'deliberate-session-end.py',
+    event: 'SessionEnd',
     timeout: 5
   }
 ];
@@ -456,7 +465,6 @@ function updateSettings() {
 
     const hookPath = path.join(HOOKS_DIR, hook.dest);
     const hookConfig = {
-      matcher: hook.matcher,
       hooks: [
         {
           type: 'command',
@@ -465,15 +473,21 @@ function updateSettings() {
         }
       ]
     };
+    // Only include matcher when one is configured. Lifecycle events like
+    // SessionEnd in Claude Code do not use matchers.
+    if (typeof hook.matcher === 'string' && hook.matcher.length > 0) {
+      hookConfig.matcher = hook.matcher;
+    }
 
+    const label = hook.matcher ? `for ${hook.matcher}` : '(no matcher)';
     if (existingIndex >= 0) {
       // Update existing
       settings.hooks[event][existingIndex] = hookConfig;
-      console.log(`Updated ${event} hook for ${hook.matcher}`);
+      console.log(`Updated ${event} hook ${label}`);
     } else {
       // Add new
       settings.hooks[event].push(hookConfig);
-      console.log(`Added ${event} hook for ${hook.matcher}`);
+      console.log(`Added ${event} hook ${label}`);
     }
   }
 
@@ -597,6 +611,27 @@ async function captureClaudeOAuthToken() {
 }
 
 /**
+ * Check if Dexter is configured on this machine.
+ * @returns {boolean}
+ */
+function isDexterConfigured() {
+  return existsSync(path.join(HOME_DIR, '.dexterd', 'auth.env'));
+}
+
+/**
+ * Check if Dexter gateway is running.
+ * @returns {boolean}
+ */
+function isDexterRunning() {
+  try {
+    execSync('curl -s http://127.0.0.1:11435/health', { stdio: 'ignore', timeout: 2000 });
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
  * Check if Ollama is running
  * @returns {boolean}
  */
@@ -692,33 +727,31 @@ async function configureLLM() {
   // Build options based on what's available
   const options = [];
 
-  // Check for existing Claude credentials or Claude CLI
-  const existingCreds = checkExistingClaudeCredentials();
-  if (existingCreds.exists) {
+  if (isDexterConfigured()) {
     options.push({
-      value: 'claude-subscription-existing',
-      label: 'Claude Pro/Max Subscription [credentials found] (recommended)'
-    });
-  } else if (checkClaudeCLI()) {
-    options.push({
-      value: 'claude-subscription',
-      label: 'Claude Pro/Max Subscription (recommended)'
+      value: 'dexter',
+      label: isDexterRunning()
+        ? 'Dexter local gateway [auth + server found] (recommended)'
+        : 'Dexter local gateway [auth found, server not running] (recommended)'
     });
   }
 
-  // Always offer direct API
+  if (isOllamaRunning()) {
+    options.push({
+      value: 'ollama',
+      label: 'Ollama OpenAI-compatible endpoint [running]'
+    });
+  }
+
+  options.push({
+    value: 'openai-compatible',
+    label: 'Custom OpenAI-compatible endpoint'
+  });
+
   options.push({
     value: 'anthropic',
     label: 'Anthropic API Key (pay-per-token)'
   });
-
-  // Check for Ollama
-  if (isOllamaRunning()) {
-    options.push({
-      value: 'ollama',
-      label: 'Ollama (local) [running]'
-    });
-  }
 
   options.push({
     value: 'skip',
@@ -737,26 +770,9 @@ async function configureLLM() {
   }
 
   let apiKey = null;
+  let providerOptions = {};
 
-  if (provider === 'claude-subscription-existing') {
-    // Use existing credentials
-    apiKey = existingCreds.token;
-    console.log('');
-    console.log('Using existing Claude credentials.');
-  } else if (provider === 'claude-subscription') {
-    // Run claude setup-token to get new credentials
-    const result = await captureClaudeOAuthToken();
-    if (!result.success) {
-      console.log('');
-      console.log(`Error: ${result.error}`);
-      console.log('');
-      console.log('If running inside Claude Code or a non-interactive terminal,');
-      console.log('first run this in a separate terminal: claude setup-token');
-      console.log('Then re-run: deliberate install');
-      return;
-    }
-    apiKey = result.token;
-  } else if (provider === 'anthropic') {
+  if (provider === 'anthropic') {
     console.log('');
     console.log('Get your API key from: https://console.anthropic.com/settings/keys');
     apiKey = await prompt('Enter your Anthropic API key: ', true);
@@ -770,16 +786,29 @@ async function configureLLM() {
         return;
       }
     }
-  }
+  } else if (provider === 'openai-compatible') {
+    const baseUrl = await prompt('Base URL ending in /v1/chat/completions: ');
+    const model = await prompt('Model name: ');
+    const authTokenEnv = await prompt('Optional env var for auth token (blank for none): ');
+    const authTokenFile = authTokenEnv
+      ? await prompt('Optional auth env file path (blank for none): ')
+      : '';
 
-  // Normalize provider name for storage
-  const providerToSave = provider.startsWith('claude-subscription') ? 'claude-subscription' : provider;
+    providerOptions = {
+      baseUrl: baseUrl.trim(),
+      model: model.trim(),
+      authTokenEnv: authTokenEnv.trim() || null,
+      authTokenFile: authTokenFile.trim() || null,
+      authHeader: authTokenEnv.trim() ? 'authorization' : null,
+      requiresAuth: Boolean(authTokenEnv.trim())
+    };
+  }
 
   // Save configuration
   try {
-    setLLMProvider(providerToSave, { apiKey });
+    setLLMProvider(provider, { apiKey, ...providerOptions });
     console.log('');
-    console.log(`Configured: ${LLM_PROVIDERS[providerToSave].name}`);
+    console.log(`Configured: ${LLM_PROVIDERS[provider].name}`);
     console.log(`Config saved to: ${getConfigFile()}`);
 
     // Set restrictive permissions on config file (contains API key/token)

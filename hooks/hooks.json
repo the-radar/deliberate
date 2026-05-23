@@ -46,6 +46,17 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/deliberate-session-end.py\"",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

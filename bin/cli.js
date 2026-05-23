@@ -295,4 +295,20 @@ program
     }
   });
 
+program
+  .command('cleanup')
+  .description('Reconcile pane lock files in ~/.deliberate/panes/ with reality')
+  .option('--dry-run', 'Report what would be removed without deleting anything', false)
+  .option('--max-age-days <days>', 'Remove legacy locks with no pid older than N days', '7')
+  .action(async (options) => {
+    const { cleanupPanes, formatCleanupSummary } = await import('../src/cleanup.js');
+    const maxAgeDays = Number.parseInt(options.maxAgeDays, 10);
+    const summary = cleanupPanes({
+      dryRun: Boolean(options.dryRun),
+      maxAgeDays: Number.isFinite(maxAgeDays) ? maxAgeDays : 7
+    });
+    console.log(formatCleanupSummary(summary));
+    if (options.dryRun) console.log('(dry run — no files were removed)');
+  });
+
 program.parse();

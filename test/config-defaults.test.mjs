@@ -30,6 +30,7 @@ test('default config exposes web search + auto approve settings', async () => {
     assert.equal(loaded.deliberate.webSearch.enabled, true);
     assert.deepEqual(loaded.deliberate.webSearch.sources, ['npm', 'pypi', 'github', 'gitlab']);
     assert.deepEqual(loaded.deliberate.autoApprove.patterns, []);
+    assert.equal(loaded.llm.provider, 'dexter');
     assert.equal(loaded.onboarding.completed, false);
     assert.equal(loaded.onboarding.lastShownAt, null);
   });

@@ -66,10 +66,13 @@ const DEFAULT_CONFIG = {
     }
   },
   llm: {
-    provider: null,  // 'claude-subscription', 'anthropic', 'ollama', or null
-    apiKey: null,    // For 'anthropic' provider
-    baseUrl: null,   // Custom URL (e.g., Ollama endpoint)
-    model: null      // Model to use
+    provider: 'dexter',
+    apiKey: null,
+    baseUrl: null,
+    model: null,
+    authTokenFile: null,
+    authTokenEnv: null,
+    authHeader: null
   },
   // Local Deliberate server for broadcast/config/chat transport.
   server: {
@@ -126,27 +129,42 @@ const DEFAULT_CONFIG = {
 
 // Provider configurations
 export const LLM_PROVIDERS = {
-  'claude-subscription': {
-    name: 'Claude Pro/Max Subscription',
-    description: 'Use your Claude Pro or Max subscription (recommended)',
-    baseUrl: 'https://api.anthropic.com/v1/messages',
-    model: 'claude-sonnet-4-20250514',
-    requiresApiKey: false,  // Uses OAuth token
-    usesOAuth: true
+  dexter: {
+    name: 'Dexter (local)',
+    description: 'Use the authenticated local Dexter gateway',
+    baseUrl: 'http://127.0.0.1:11435/v1/chat/completions',
+    model: 'fast',
+    requiresApiKey: false,
+    requiresAuth: true,
+    authTokenFile: '~/.dexterd/auth.env',
+    authTokenEnv: 'DEXTER_AUTH_TOKEN',
+    authHeader: 'x-api-key',
+    protocol: 'openai-chat-completions'
+  },
+  'openai-compatible': {
+    name: 'OpenAI-compatible endpoint',
+    description: 'Use any endpoint that supports /v1/chat/completions',
+    baseUrl: 'http://127.0.0.1:11434/v1/chat/completions',
+    model: 'llama3.2',
+    requiresApiKey: false,
+    authHeader: 'authorization',
+    protocol: 'openai-chat-completions'
   },
   anthropic: {
     name: 'Anthropic API Key',
     description: 'Use your Anthropic API key directly (pay-per-token)',
     baseUrl: 'https://api.anthropic.com/v1/messages',
     model: 'claude-3-5-haiku-20241022',
-    requiresApiKey: true
+    requiresApiKey: true,
+    protocol: 'anthropic-messages'
   },
   ollama: {
     name: 'Ollama (local)',
-    description: 'Use a local Ollama model (free, private)',
-    baseUrl: 'http://localhost:11434/api/generate',
+    description: 'Use a local Ollama OpenAI-compatible endpoint',
+    baseUrl: 'http://127.0.0.1:11434/v1/chat/completions',
     model: 'llama3.2',
-    requiresApiKey: false
+    requiresApiKey: false,
+    protocol: 'openai-chat-completions'
   }
 };
 
@@ -309,22 +327,28 @@ export function addAutoApprovePattern(pattern) {
  */
 export function getLLMConfig() {
   const config = loadConfig();
-  const llm = config.llm;
+  const llm = config.llm || {};
+  const provider = llm.provider || DEFAULT_CONFIG.llm.provider;
 
-  if (!llm.provider) {
+  if (!provider) {
     return null;
   }
 
-  const providerConfig = LLM_PROVIDERS[llm.provider];
+  const providerConfig = LLM_PROVIDERS[provider];
   if (!providerConfig) {
     return null;
   }
 
   return {
-    provider: llm.provider,
+    provider,
+    protocol: llm.protocol || providerConfig.protocol || 'openai-chat-completions',
     baseUrl: llm.baseUrl || providerConfig.baseUrl,
-    apiKey: llm.apiKey,
-    model: llm.model || providerConfig.model
+    apiKey: llm.apiKey || null,
+    model: llm.model || providerConfig.model,
+    authTokenFile: llm.authTokenFile || providerConfig.authTokenFile || null,
+    authTokenEnv: llm.authTokenEnv || providerConfig.authTokenEnv || null,
+    authHeader: llm.authHeader || providerConfig.authHeader || null,
+    requiresAuth: llm.requiresAuth ?? providerConfig.requiresAuth ?? false
   };
 }
 
@@ -346,7 +370,12 @@ export function setLLMProvider(provider, options = {}) {
     provider,
     apiKey: options.apiKey || null,
     baseUrl: options.baseUrl || providerConfig.baseUrl,
-    model: options.model || providerConfig.model
+    model: options.model || providerConfig.model,
+    authTokenFile: options.authTokenFile || providerConfig.authTokenFile || null,
+    authTokenEnv: options.authTokenEnv || providerConfig.authTokenEnv || null,
+    authHeader: options.authHeader || providerConfig.authHeader || null,
+    requiresAuth: options.requiresAuth ?? providerConfig.requiresAuth ?? false,
+    protocol: options.protocol || providerConfig.protocol || 'openai-chat-completions'
   };
 
   saveConfig(config);

@@ -12,15 +12,13 @@
  * - Bound message sizes and time out upstream calls.
  */
 
-import { loadConfig } from './config.js';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { getLLMConfig } from './config.js';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
-const DEFAULT_ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_MAX_TOKENS = 800;
 const DEFAULT_TIMEOUT_MS = 60_000;
-
-const execFileAsync = promisify(execFile);
 
 function nowIso() {
   return new Date().toISOString();
@@ -37,6 +35,65 @@ function isMessageArray(value) {
   return Array.isArray(value) && value.every((m) => m && typeof m === 'object');
 }
 
+function resolveHomePath(filePath) {
+  if (typeof filePath !== 'string' || !filePath.trim()) return null;
+  const trimmed = filePath.trim();
+  if (trimmed === '~') return os.homedir();
+  if (trimmed.startsWith('~/')) return path.join(os.homedir(), trimmed.slice(2));
+  return trimmed;
+}
+
+function readEnvTokenFile(filePath, envName) {
+  const resolved = resolveHomePath(filePath);
+  if (!resolved || typeof envName !== 'string' || !envName.trim()) return null;
+
+  try {
+    const body = fs.readFileSync(resolved, 'utf-8');
+    const pattern = new RegExp(`^\\s*(?:export\\s+)?${envName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=(.*)$`, 'm');
+    const match = body.match(pattern);
+    if (!match) return null;
+    return match[1].trim().replace(/^['\"]|['\"]$/g, '') || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveAuthToken(llm) {
+  if (typeof llm.apiKey === 'string' && llm.apiKey.trim()) {
+    return llm.apiKey.trim();
+  }
+
+  if (llm.authTokenEnv && process.env[llm.authTokenEnv]) {
+    return process.env[llm.authTokenEnv].trim() || null;
+  }
+
+  return readEnvTokenFile(llm.authTokenFile, llm.authTokenEnv);
+}
+
+function buildAuthHeaders(llm) {
+  const token = resolveAuthToken(llm);
+  if (!token) return {};
+
+  const header = String(llm.authHeader || 'authorization').toLowerCase();
+  if (header === 'x-api-key') {
+    return { 'x-api-key': token };
+  }
+
+  return { authorization: `Bearer ${token}` };
+}
+
+function buildLLMConfig() {
+  return getLLMConfig() || {
+    provider: null,
+    protocol: 'openai-chat-completions',
+    baseUrl: null,
+    apiKey: null,
+    model: null,
+    authTokenFile: null,
+    authTokenEnv: null,
+    authHeader: null
+  };
+}
 function buildSystemPrompt(context) {
   const parts = [];
   parts.push('You are Deliberate, a safety assistant helping a developer understand what a shell command will do.');
@@ -70,60 +127,103 @@ function buildSystemPrompt(context) {
   return parts.join('\n');
 }
 
-function getAnthropicConfig() {
-  const config = loadConfig();
-  const llm = config.llm || {};
-  const provider = llm.provider || null;
-
-  // "anthropic" provider uses an API key.
-  // "claude-subscription" uses OAuth from the macOS keychain (or an override key).
-  const apiKey = llm.apiKey || process.env.ANTHROPIC_API_KEY || null;
-
-  return {
-    provider,
-    apiKey,
-    baseUrl: llm.baseUrl || 'https://api.anthropic.com/v1/messages',
-    model: llm.model || 'claude-3-5-haiku-20241022'
-  };
-}
-
-async function getClaudeCodeOAuthTokenFromKeychain() {
-  // Matches the Python hook behavior. We never print this value.
-  if (process.platform !== 'darwin') return null;
-
-  try {
-    const { stdout } = await execFileAsync('/usr/bin/security', [
-      'find-generic-password',
-      '-s',
-      'Claude Code-credentials',
-      '-w'
-    ], { timeout: 5000, maxBuffer: 1024 * 1024 });
-
-    const raw = String(stdout || '').trim();
-    if (!raw) return null;
-
-    const parsed = JSON.parse(raw);
-    const token = parsed?.claudeAiOauth?.accessToken;
-    if (typeof token !== 'string') return null;
-
-    // Claude Code tokens we have seen are sk-ant-oat01-*.
-    if (!token.startsWith('sk-ant-oat01-')) return null;
-    return token;
-  } catch {
-    return null;
-  }
-}
-
 async function streamMockResponse(prompt, onEvent, { signal } = {}) {
-  const text = `Mock chat response.\n\nYou asked:\n${prompt}\n\nIf you want real chat, set an Anthropic API key in ~/.deliberate/config.json (llm.apiKey) or ANTHROPIC_API_KEY.`;
+  const text = `Mock chat response.\n\nYou asked:\n${prompt}\n\nIf you want real chat, configure deliberate's llm.baseUrl, llm.model, and local auth settings in ~/.deliberate/config.json.`;
   const chunks = text.split(/(\s+)/).filter(Boolean);
 
   for (const chunk of chunks) {
     if (signal?.aborted) return;
     onEvent?.({ type: 'token', text: chunk });
-    // Small delay gives UIs something to animate without making tests slow.
     await new Promise((r) => setTimeout(r, 5));
   }
+}
+
+function buildMessagesPayload(messages) {
+  return messages
+    .slice(0, 50)
+    .map((m) => ({
+      role: m.role === 'assistant' ? 'assistant' : 'user',
+      content: safeString(m.content, 20_000) || ''
+    }));
+}
+
+function emitDelta(parsed, protocol, onEvent) {
+  if (protocol === 'anthropic-messages') {
+    if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+      const text = parsed.delta?.text;
+      if (typeof text === 'string' && text.length) onEvent?.({ type: 'token', text });
+    }
+    return;
+  }
+
+  const text = parsed.choices?.[0]?.delta?.content ?? parsed.choices?.[0]?.message?.content;
+  if (typeof text === 'string' && text.length) onEvent?.({ type: 'token', text });
+}
+
+async function streamSseResponse(response, protocol, onEvent, abortController) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let idx;
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, idx).trimEnd();
+      buffer = buffer.slice(idx + 1);
+
+      if (!line || !line.startsWith('data:')) continue;
+
+      const raw = line.slice('data:'.length).trim();
+      if (!raw || raw === '[DONE]') continue;
+
+      try {
+        emitDelta(JSON.parse(raw), protocol, onEvent);
+      } catch {
+        continue;
+      }
+    }
+
+    if (abortController.signal.aborted) break;
+  }
+}
+
+function buildRequestPayload(llm, system, messages, maxTokens) {
+  const payload = {
+    model: llm.model,
+    max_tokens: Number(maxTokens) > 0 ? Math.min(Number(maxTokens), 4000) : DEFAULT_MAX_TOKENS,
+    stream: true,
+    messages: buildMessagesPayload(messages)
+  };
+
+  if (llm.protocol === 'anthropic-messages') {
+    return { ...payload, system };
+  }
+
+  return {
+    ...payload,
+    reasoning: { effort: 'none' },
+    messages: [
+      { role: 'system', content: system },
+      ...payload.messages
+    ]
+  };
+}
+
+function buildRequestHeaders(llm) {
+  const headers = {
+    'content-type': 'application/json',
+    ...buildAuthHeaders(llm)
+  };
+
+  if (llm.protocol === 'anthropic-messages') {
+    headers['anthropic-version'] = '2023-06-01';
+  }
+
+  return headers;
 }
 
 /**
@@ -146,15 +246,11 @@ export async function streamChat({ messages, context = {}, maxTokens, onEvent, s
   const userPrompt = safeString(latestUser?.content, 20_000) || '';
 
   const mode = String(process.env.DELIBERATE_CHAT_MODE || '').toLowerCase();
-  const anth = getAnthropicConfig();
+  const llm = buildLLMConfig();
 
   const wantsMock = mode === 'mock';
-  const oauthToken = (!wantsMock && anth.provider === 'claude-subscription' && !anth.apiKey)
-    ? await getClaudeCodeOAuthTokenFromKeychain()
-    : null;
-
-  // If we have neither an API key nor an OAuth token, we must mock.
-  const shouldMock = wantsMock || (!anth.apiKey && !oauthToken);
+  const hasAuth = Boolean(resolveAuthToken(llm));
+  const shouldMock = wantsMock || !llm.baseUrl || !llm.model || (llm.requiresAuth && !hasAuth);
   if (shouldMock) {
     await streamMockResponse(userPrompt, onEvent, { signal });
     onEvent?.({ type: 'done', timestamp: nowIso() });
@@ -179,35 +275,10 @@ export async function streamChat({ messages, context = {}, maxTokens, onEvent, s
       evidence: Array.isArray(context.evidence) ? context.evidence : null
     });
 
-    const payload = {
-      model: anth.model,
-      max_tokens: Number(maxTokens) > 0 ? Math.min(Number(maxTokens), 4000) : DEFAULT_MAX_TOKENS,
-      stream: true,
-      system,
-      messages: messages
-        .slice(0, 50)
-        .map((m) => ({
-          role: m.role === 'assistant' ? 'assistant' : 'user',
-          content: safeString(m.content, 20_000) || ''
-        }))
-    };
+    const payload = buildRequestPayload(llm, system, messages, maxTokens);
+    const headers = buildRequestHeaders(llm);
 
-    // Auth handling:
-    // - Anthropic API keys use x-api-key
-    // - Claude subscription tokens are OAuth and use Authorization: Bearer
-    const headers = {
-      'content-type': 'application/json',
-      'anthropic-version': DEFAULT_ANTHROPIC_VERSION
-    };
-
-    if (oauthToken) {
-      headers.authorization = `Bearer ${oauthToken}`;
-      headers['anthropic-beta'] = 'oauth-2025-04-20,claude-code-20250219,interleaved-thinking-2025-05-14';
-    } else {
-      headers['x-api-key'] = anth.apiKey;
-    }
-
-    const response = await fetch(anth.baseUrl, {
+    const response = await fetch(llm.baseUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
@@ -226,44 +297,7 @@ export async function streamChat({ messages, context = {}, maxTokens, onEvent, s
       return;
     }
 
-    // Anthropic streaming uses server-sent events. Parse line-by-line.
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      let idx;
-      while ((idx = buffer.indexOf('\n')) >= 0) {
-        const line = buffer.slice(0, idx).trimEnd();
-        buffer = buffer.slice(idx + 1);
-
-        if (!line) continue;
-        if (!line.startsWith('data:')) continue;
-
-        const raw = line.slice('data:'.length).trim();
-        if (!raw || raw === '[DONE]') continue;
-
-        let parsed;
-        try {
-          parsed = JSON.parse(raw);
-        } catch {
-          continue;
-        }
-
-        if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
-          const text = parsed.delta?.text;
-          if (typeof text === 'string' && text.length) {
-            onEvent?.({ type: 'token', text });
-          }
-        }
-      }
-
-      if (abortController.signal.aborted) break;
-    }
+    await streamSseResponse(response, llm.protocol, onEvent, abortController);
 
     if (abortController.signal.aborted) {
       onEvent?.({ type: 'error', message: 'Chat aborted' });

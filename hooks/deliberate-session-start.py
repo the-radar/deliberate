@@ -126,24 +126,116 @@ def _pane_lock_path(session_id: str) -> Path:
     return Path.home() / ".deliberate" / "panes" / f"pane-started-{safe}.json"
 
 
-def _try_lock(session_id: str) -> bool:
-    """Create a lock file once per session to prevent duplicate panes."""
+def _pid_alive(pid: Optional[int]) -> bool:
+    if not pid or pid <= 0:
+        return False
     try:
-        lock_path = _pane_lock_path(session_id)
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        if lock_path.exists():
-            return False
-        with open(lock_path, "x", encoding="utf-8") as f:
-            json.dump({"sessionId": session_id, "timestamp": _now_iso()}, f)
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # PID exists but is owned by another user.
         return True
     except Exception:
         return False
 
 
-def _spawn_detached(argv: List[str], cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None):
-    """Spawn a detached process and return immediately (best-effort)."""
+def _read_lock(lock_path: Path) -> Dict[str, Any]:
     try:
-        subprocess.Popen(  # noqa: S603,S607 - controlled argv, local use only
+        with open(lock_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
+
+
+def _prune_stale_locks(max_age_days: int = 7) -> None:
+    """Remove lock files whose recorded pid is dead, or that have aged out.
+
+    Best-effort — never raises. Keeps the panes/ directory from growing forever
+    when SessionEnd hooks miss (crash, force-quit, old Claude Code build).
+    """
+    try:
+        base = Path.home() / ".deliberate" / "panes"
+        if not base.is_dir():
+            return
+        cutoff = datetime.utcnow().timestamp() - (max_age_days * 86400)
+        for entry in base.iterdir():
+            if not entry.is_file() or not entry.name.startswith("pane-started-"):
+                continue
+            data = _read_lock(entry)
+            pid = data.get("pid") if isinstance(data, dict) else None
+            try:
+                pid_int = int(pid) if pid is not None else None
+            except (TypeError, ValueError):
+                pid_int = None
+            # Drop if PID recorded but dead, OR no PID and file is old.
+            if pid_int is not None:
+                if not _pid_alive(pid_int):
+                    entry.unlink(missing_ok=True)
+                continue
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    entry.unlink(missing_ok=True)
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
+def _claim_lock_slot(session_id: str) -> bool:
+    """Check whether a fresh pane should be spawned for this session.
+
+    Self-heals stale locks: if the recorded pane PID is dead, the slot is
+    reclaimable. Returns True if caller may spawn a new pane.
+    """
+    try:
+        lock_path = _pane_lock_path(session_id)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        if not lock_path.exists():
+            return True
+        existing = _read_lock(lock_path)
+        existing_pid = existing.get("pid")
+        try:
+            existing_pid_int = int(existing_pid) if existing_pid is not None else None
+        except (TypeError, ValueError):
+            existing_pid_int = None
+        if existing_pid_int is not None and _pid_alive(existing_pid_int):
+            return False
+        # Stale: dead PID or legacy lock with no PID — reclaim.
+        lock_path.unlink(missing_ok=True)
+        return True
+    except Exception:
+        # Fail closed: avoid spawning if we cannot reason about state.
+        return False
+
+
+def _write_lock(session_id: str, pane_pid: Optional[int]) -> None:
+    """Atomically write the per-session pane lock with the live pane PID."""
+    try:
+        lock_path = _pane_lock_path(session_id)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "sessionId": session_id,
+            "pid": int(pane_pid) if pane_pid else None,
+            "ppid": os.getppid(),
+            "timestamp": _now_iso(),
+        }
+        tmp = lock_path.with_suffix(lock_path.suffix + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+        tmp.replace(lock_path)
+    except Exception:
+        pass
+
+
+def _spawn_detached(argv: List[str], cwd: Optional[str] = None, env: Optional[Dict[str, str]] = None) -> Optional[int]:
+    """Spawn a detached process and return its PID (or None on failure)."""
+    try:
+        proc = subprocess.Popen(  # noqa: S603,S607 - controlled argv, local use only
             argv,
             cwd=cwd or None,
             env=env or os.environ.copy(),
@@ -152,8 +244,9 @@ def _spawn_detached(argv: List[str], cwd: Optional[str] = None, env: Optional[Di
             stdin=subprocess.DEVNULL,
             start_new_session=True,
         )
+        return proc.pid
     except Exception:
-        pass
+        return None
 
 
 def main() -> int:
@@ -189,9 +282,12 @@ def main() -> int:
     if not auto_pane:
         return 0
 
+    # Opportunistic cleanup: drop pane lock files whose pane PID is dead.
+    _prune_stale_locks()
+
     # Lock per session_id so we do not spawn multiple panes if SessionStart
-    # fires more than once.
-    if not _try_lock(str(session_id)):
+    # fires more than once. Self-heals stale (dead-PID) locks.
+    if not _claim_lock_slot(str(session_id)):
         return 0
 
     repo = _repo_root()
@@ -209,11 +305,14 @@ def main() -> int:
 
     # Open pane filtered to this session.
     cli_js = str(repo / "bin" / "cli.js")
-    _spawn_detached(
+    pane_pid = _spawn_detached(
         ["node", cli_js, "pane", "--session", str(session_id)],
         cwd=cwd,
         env=os.environ.copy(),
     )
+
+    # Record the spawned pane's PID so SessionEnd / cleanup can verify and kill.
+    _write_lock(str(session_id), pane_pid)
 
     return 0
 

@@ -611,28 +611,7 @@ async function captureClaudeOAuthToken() {
 }
 
 /**
- * Check if Dexter is configured on this machine.
- * @returns {boolean}
- */
-function isDexterConfigured() {
-  return existsSync(path.join(HOME_DIR, '.dexterd', 'auth.env'));
-}
-
-/**
- * Check if Dexter gateway is running.
- * @returns {boolean}
- */
-function isDexterRunning() {
-  try {
-    execSync('curl -s http://127.0.0.1:11435/health', { stdio: 'ignore', timeout: 2000 });
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
-
-/**
- * Check if Ollama is running
+ * Check if Ollama is running on its default port.
  * @returns {boolean}
  */
 function isOllamaRunning() {
@@ -727,25 +706,16 @@ async function configureLLM() {
   // Build options based on what's available
   const options = [];
 
-  if (isDexterConfigured()) {
-    options.push({
-      value: 'dexter',
-      label: isDexterRunning()
-        ? 'Dexter local gateway [auth + server found] (recommended)'
-        : 'Dexter local gateway [auth found, server not running] (recommended)'
-    });
-  }
-
   if (isOllamaRunning()) {
     options.push({
       value: 'ollama',
-      label: 'Ollama OpenAI-compatible endpoint [running]'
+      label: 'Ollama OpenAI-compatible endpoint [running] (recommended)'
     });
   }
 
   options.push({
     value: 'openai-compatible',
-    label: 'Custom OpenAI-compatible endpoint'
+    label: 'Custom OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp, private gateway, etc.)'
   });
 
   options.push({

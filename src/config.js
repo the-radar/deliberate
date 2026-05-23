@@ -66,10 +66,15 @@ const DEFAULT_CONFIG = {
     }
   },
   llm: {
-    provider: 'dexter',
+    // Default points at a local OpenAI-compatible endpoint (e.g. Ollama on
+    // http://localhost:11434/v1). Override `provider` to one of the keys in
+    // LLM_PROVIDERS, or set fields directly to bring your own gateway.
+    provider: 'openai-compatible',
     apiKey: null,
     baseUrl: null,
     model: null,
+    // Optional token resolution for private gateways. Resolution order:
+    //   apiKey > authTokenEnv > authTokenFile > none
     authTokenFile: null,
     authTokenEnv: null,
     authHeader: null
@@ -127,26 +132,22 @@ const DEFAULT_CONFIG = {
   }
 };
 
-// Provider configurations
+// Provider configurations.
+//
+// Presets cover common local setups (Ollama, LM Studio, generic OpenAI-compatible
+// gateways). Bring-your-own gateways are configured by setting the user config
+// fields directly — no preset is required and no gateway is special-cased.
 export const LLM_PROVIDERS = {
-  dexter: {
-    name: 'Dexter (local)',
-    description: 'Use the authenticated local Dexter gateway',
-    baseUrl: 'http://127.0.0.1:11435/v1/chat/completions',
-    model: 'fast',
-    requiresApiKey: false,
-    requiresAuth: true,
-    authTokenFile: '~/.dexterd/auth.env',
-    authTokenEnv: 'DEXTER_AUTH_TOKEN',
-    authHeader: 'x-api-key',
-    protocol: 'openai-chat-completions'
-  },
   'openai-compatible': {
     name: 'OpenAI-compatible endpoint',
     description: 'Use any endpoint that supports /v1/chat/completions',
     baseUrl: 'http://127.0.0.1:11434/v1/chat/completions',
     model: 'llama3.2',
     requiresApiKey: false,
+    // Token resolution is opt-in: leave authTokenFile / authTokenEnv null for
+    // unauthenticated local gateways; set either one for private gateways.
+    authTokenFile: null,
+    authTokenEnv: null,
     authHeader: 'authorization',
     protocol: 'openai-chat-completions'
   },
@@ -334,17 +335,25 @@ export function getLLMConfig() {
     return null;
   }
 
-  const providerConfig = LLM_PROVIDERS[provider];
-  if (!providerConfig) {
+  // Unknown provider keys fall through to a bare config — as long as the user
+  // supplied `baseUrl` and `model` directly, we can still drive any OpenAI-
+  // compatible gateway without a preset. This keeps personal configs portable
+  // across preset renames.
+  const providerConfig = LLM_PROVIDERS[provider] || {};
+
+  const baseUrl = llm.baseUrl || providerConfig.baseUrl || null;
+  const model = llm.model || providerConfig.model || null;
+
+  if (!baseUrl || !model) {
     return null;
   }
 
   return {
     provider,
     protocol: llm.protocol || providerConfig.protocol || 'openai-chat-completions',
-    baseUrl: llm.baseUrl || providerConfig.baseUrl,
+    baseUrl,
     apiKey: llm.apiKey || null,
-    model: llm.model || providerConfig.model,
+    model,
     authTokenFile: llm.authTokenFile || providerConfig.authTokenFile || null,
     authTokenEnv: llm.authTokenEnv || providerConfig.authTokenEnv || null,
     authHeader: llm.authHeader || providerConfig.authHeader || null,

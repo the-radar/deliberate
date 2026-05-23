@@ -30,18 +30,18 @@ test('streamChat emits token and done events in mock mode', async () => {
   }
 });
 
-test('streamChat sends Dexter token from auth env file to OpenAI-compatible endpoint', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deliberate-chat-client-dexter-'));
+test('streamChat reads auth token from env-file for a private OpenAI-compatible gateway', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'deliberate-chat-client-gateway-'));
   const configFile = path.join(tmpDir, 'config.json');
   const authFile = path.join(tmpDir, 'auth.env');
-  fs.writeFileSync(authFile, 'DEXTER_AUTH_TOKEN=secret-test-token\n');
+  fs.writeFileSync(authFile, 'GATEWAY_AUTH_TOKEN=secret-test-token\n');
   fs.writeFileSync(configFile, JSON.stringify({
     llm: {
-      provider: 'dexter',
+      provider: 'openai-compatible',
       baseUrl: 'http://local.test/v1/chat/completions',
       model: 'fast',
       authTokenFile: authFile,
-      authTokenEnv: 'DEXTER_AUTH_TOKEN',
+      authTokenEnv: 'GATEWAY_AUTH_TOKEN',
       authHeader: 'x-api-key',
       requiresAuth: true,
       protocol: 'openai-chat-completions'

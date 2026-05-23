@@ -517,6 +517,22 @@ export async function runTui(options = {}) {
 
   const anchorCwd = options.cwd || process.cwd();
 
+  // Resolve interaction mode. The `mode` config field is authoritative; older
+  // configs that only set `recordOnly` are interpreted as observe/teach (when
+  // true) or block+teach (when false). Default is "teach" — narrated, never
+  // blocking.
+  const resolveInitialMode = () => {
+    const raw = config.deliberate?.mode;
+    if (typeof raw === 'string') {
+      const normalized = raw.trim().toLowerCase();
+      if (normalized === 'observe' || normalized === 'teach' || normalized === 'block+teach') {
+        return normalized;
+      }
+    }
+    if (config.deliberate?.recordOnly === false) return 'block+teach';
+    return 'teach';
+  };
+
   const state = {
     follow: options.follow ?? true,
     allSessions: options.allSessions ?? false,
@@ -526,6 +542,7 @@ export async function runTui(options = {}) {
     serverOk: false,
     statusMessage: '',
     deliberateOn,
+    mode: resolveInitialMode(),
     recordOnly: config.deliberate?.recordOnly === true,
     explainEverything: config.deliberate?.explainEverything === true,
     pendingCount: 0
@@ -621,6 +638,7 @@ export async function runTui(options = {}) {
     '↑/↓ navigate',
     'PgUp/PgDn details',
     'v review/timeline',
+    't mode',
     'a all',
     'n next session',
     'f follow',
@@ -648,7 +666,8 @@ export async function runTui(options = {}) {
     const followLabel = state.follow ? 'follow' : 'paused';
     const enabledLabel = state.deliberateOn ? 'On' : 'Off';
     const viewLabel = state.viewMode === 'review' ? 'Needs review' : 'Timeline';
-    const behaviorLabel = state.recordOnly ? 'record-only' : 'approval mode';
+    const modeLabel = state.mode.toUpperCase();
+    const behaviorLabel = `mode ${modeLabel}`;
     const coverageLabel = state.explainEverything ? 'everything' : 'high-signal';
 
     const line1 = `Deliberate ${enabledLabel} • ${viewLabel} • waiting ${state.pendingCount} • session ${sessionLabel}`;
@@ -854,6 +873,34 @@ export async function runTui(options = {}) {
       setStatus('saved: block pattern');
     } catch {
       setStatus('block failed');
+    }
+  });
+
+  // `t` cycles interaction mode: observe → teach → block+teach → observe.
+  // Persists to config so the next TUI run keeps the same shape, and keeps
+  // legacy `recordOnly` in sync so the PreToolUse hook (which still reads it
+  // as a fallback) does not disagree with the visible mode.
+  screen.key(['t'], () => {
+    const order = ['observe', 'teach', 'block+teach'];
+    const current = order.indexOf(state.mode);
+    const next = order[(current + 1) % order.length];
+    const nextRecordOnly = next !== 'block+teach';
+    try {
+      config = patchConfig({
+        deliberate: { mode: next, recordOnly: nextRecordOnly }
+      });
+      state.mode = next;
+      state.recordOnly = nextRecordOnly;
+      appendEventLog({
+        type: 'policy_update',
+        timestamp: new Date().toISOString(),
+        sessionId: state.sessionId || 'manual',
+        data: { action: 'set_mode', mode: next, cwd: process.cwd() }
+      });
+      setStatus(`mode → ${next}`);
+      renderAll();
+    } catch {
+      setStatus('mode change failed');
     }
   });
 

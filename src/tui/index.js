@@ -18,6 +18,9 @@ import { fileURLToPath } from 'url';
 import { loadConfig, patchConfig, addSkipCommand, addCustomBlock, addAutoApprovePattern } from '../config.js';
 import { appendEventLog, readRecentEvents, tailEventLog } from '../event-log.js';
 import { streamChat } from '../chat-client.js';
+import { clusterEvents } from '../timeline/cluster.js';
+import { renderObserveTimeline, renderCluster } from '../timeline/observe-render.js';
+import { renderClusterWithLLM } from '../timeline/llm-render.js';
 
 function isTty() {
   return Boolean(process.stdout.isTTY && process.stdin.isTTY);
@@ -589,40 +592,43 @@ export async function runTui(options = {}) {
     style: { fg: 'white', bg: 'black' }
   });
 
-  const list = blessed.list({
+  // Prose timeline: a scrollable text box replaces the legacy events table.
+  // No row selection — the journal aesthetic from the outcome contract treats
+  // the timeline as one continuous narrative. Action keybinds (a/w/b/d) stay
+  // bound but operate against the most-recent visible cluster instead of a
+  // selected row; they are no-ops in observe/teach until the actions story
+  // lands in a follow-up.
+  const list = blessed.box({
     parent: screen,
     top: layout.listTop,
     left: 0,
     width: '100%',
-    height: layout.listHeight,
+    // Take the whole middle area; details pane is hidden in prose mode.
+    height: layout.listHeight + layout.detailsHeight,
     keys: true,
     vi: true,
     mouse: true,
-    border: 'line',
-    label: ' events ',
-    style: {
-      border: { fg: 'gray' },
-      selected: { bg: 'green', fg: 'black' }
-    },
-    scrollbar: { ch: ' ', track: { bg: 'gray' }, style: { bg: 'white' } }
-  });
-
-  const details = blessed.box({
-    parent: screen,
-    top: layout.detailsTop,
-    left: 0,
-    width: '100%',
-    height: layout.detailsHeight,
-    border: 'line',
-    label: ' details ',
     scrollable: true,
     alwaysScroll: true,
-    keys: true,
-    vi: true,
-    mouse: true,
+    border: 'line',
+    label: ' timeline ',
     style: {
       border: { fg: 'gray' }
-    }
+    },
+    scrollbar: { ch: ' ', track: { bg: 'gray' }, style: { bg: 'white' } },
+    tags: false
+  });
+
+  // Details pane kept as a hidden no-op so existing references (e.g. scroll
+  // helpers, layout math) keep compiling without a full rewrite. Will be
+  // removed once selection-dependent code paths are pruned.
+  const details = blessed.box({
+    parent: screen,
+    top: 0,
+    left: 0,
+    width: 0,
+    height: 0,
+    hidden: true
   });
 
   const footer = blessed.box({
@@ -635,20 +641,16 @@ export async function runTui(options = {}) {
   });
 
   const helpText = () => [
-    '↑/↓ navigate',
-    'PgUp/PgDn details',
-    'v review/timeline',
+    '↑/↓ scroll',
+    'PgUp/PgDn page',
     't mode',
     'a all',
     'n next session',
     'f follow',
-    's don\'t flag exact',
-    'w always allow',
-    'b block',
-    'd discuss',
     'e explain-all',
     'x toggle',
     'S start server',
+    'd discuss',
     'q quit'
   ].join(' | ');
 
@@ -696,27 +698,95 @@ export async function runTui(options = {}) {
     }
   };
 
-  const renderList = ({ keepSelection = true } = {}) => {
-    const width = typeof list.width === 'number' ? list.width : screen.width;
-    const items = filtered.map((ev) => summarizeEvent(ev, width - 6));
-    list.setItems(items);
-    list.setLabel(` ${state.viewMode === 'review' ? 'what needs review' : 'timeline'} `);
+  // Per-cluster LLM prose cache. Keyed by cluster id + event-count so a cluster
+  // that grows triggers a fresh LLM call; an unchanged cluster reuses prose.
+  const proseCache = new Map();
+  let llmDebounceHandle = null;
 
-    if (!keepSelection) {
-      selectedIndex = Math.max(0, items.length - 1);
-    } else {
-      selectedIndex = Math.min(selectedIndex, Math.max(0, items.length - 1));
-    }
+  function clusterCacheKey(cluster) {
+    return `${cluster.id}::${cluster.events.length}::${cluster.endMs}`;
+  }
 
-    if (items.length) {
-      list.select(selectedIndex);
+  function llmDisabledForMode() {
+    // Observe mode contractually never calls the LLM.
+    return state.mode === 'observe';
+  }
+
+  function staticClustersText(clusters) {
+    if (!clusters || clusters.length === 0) return '(no events yet)';
+    return [...clusters].reverse().map((c) => {
+      const cached = proseCache.get(clusterCacheKey(c));
+      if (cached && !llmDisabledForMode()) {
+        // LLM prose available — substitute into the journal frame.
+        return renderClusterWithCachedProse(c, cached);
+      }
+      return renderCluster(c);
+    }).join('\n');
+  }
+
+  function renderClusterWithCachedProse(cluster, proseParagraph) {
+    // Reuse the static renderer's divider + raw-lines framing, but swap the
+    // template-built paragraph for the LLM-built one. Keeping the raw-command
+    // footer so users can always see what literally ran.
+    const staticOutput = renderCluster(cluster);
+    const lines = staticOutput.split('\n');
+    // Find the prose paragraph slot (it's the first non-empty line after the
+    // divider+blank). Replace it with the LLM paragraph.
+    let dividerSeen = false;
+    let replaced = false;
+    const out = [];
+    for (const line of lines) {
+      if (!dividerSeen && line.startsWith('── ')) {
+        dividerSeen = true;
+        out.push(line);
+        continue;
+      }
+      if (dividerSeen && !replaced && line.trim() && !line.startsWith('  ') && !line.startsWith('⚠ ')) {
+        out.push(proseParagraph);
+        replaced = true;
+        continue;
+      }
+      out.push(line);
     }
+    if (!replaced) out.splice(2, 0, proseParagraph, '');
+    return out.join('\n');
+  }
+
+  function scheduleLlmFill(clusters) {
+    if (llmDisabledForMode()) return;
+    if (!Array.isArray(clusters) || clusters.length === 0) return;
+    if (llmDebounceHandle) clearTimeout(llmDebounceHandle);
+    // 3-second idle debounce per the prose-timeline outcome contract.
+    llmDebounceHandle = setTimeout(async () => {
+      // Fill prose for the most-recent N clusters first (visual priority).
+      const recent = clusters.slice(-3);
+      for (const cluster of recent) {
+        const key = clusterCacheKey(cluster);
+        if (proseCache.has(key)) continue;
+        const prose = await renderClusterWithLLM(cluster);
+        if (prose) {
+          proseCache.set(key, prose);
+          // Re-render the timeline so the new prose paints.
+          renderAll();
+        }
+      }
+    }, 3_000);
+    if (llmDebounceHandle && typeof llmDebounceHandle.unref === 'function') {
+      llmDebounceHandle.unref();
+    }
+  }
+
+  const renderList = () => {
+    const clusters = clusterEvents(filtered);
+    list.setLabel(` timeline (${state.mode}) `);
+    list.setContent(staticClustersText(clusters));
+    // Auto-scroll to bottom (newest cluster is at the top after reverse).
+    list.setScrollPerc(0);
+    scheduleLlmFill(clusters);
   };
 
   const renderDetails = () => {
-    const event = filtered[selectedIndex] || null;
-    details.setContent(detailsForEvent(event));
-    details.setScrollPerc(0);
+    // Details pane is hidden in prose view; nothing to do.
   };
 
   const renderAll = (opts = {}) => {

@@ -115,3 +115,55 @@ test('renderObserveTimeline contains no table column separators', () => {
   // The legacy table used '│' as a column separator. Prose timeline must not.
   assert.ok(!rendered.includes('│'), 'no table separators allowed in observe output');
 });
+
+import { renderClusterWithLLM, __testing__ } from '../src/timeline/llm-render.js';
+
+test('renderClusterWithLLM emits a paragraph from streamed tokens', async () => {
+  const fakeStream = async ({ onEvent }) => {
+    onEvent({ type: 'token', text: 'Claude read package.json' });
+    onEvent({ type: 'token', text: ' and confirmed the build script.' });
+    onEvent({ type: 'done' });
+  };
+  const cluster = {
+    startMs: baseTs,
+    events: [makeEvent(0, { data: { command: 'cat package.json' } })]
+  };
+  const prose = await renderClusterWithLLM(cluster, { streamChatImpl: fakeStream });
+  assert.equal(prose, 'Claude read package.json and confirmed the build script.');
+});
+
+test('renderClusterWithLLM returns null on stream error', async () => {
+  const erroring = async ({ onEvent }) => {
+    onEvent({ type: 'error', message: 'no endpoint' });
+  };
+  const cluster = {
+    startMs: baseTs,
+    events: [makeEvent(0, { data: { command: 'ls' } })]
+  };
+  const prose = await renderClusterWithLLM(cluster, { streamChatImpl: erroring });
+  assert.equal(prose, null, 'must fall back to null so caller can use observe renderer');
+});
+
+test('buildUserPrompt includes events and teaching hints', () => {
+  const cluster = {
+    events: [
+      makeEvent(0, { data: { command: 'rm -rf /tmp/x', risk: 'HIGH' } })
+    ]
+  };
+  const prompt = __testing__.buildUserPrompt(cluster);
+  assert.match(prompt, /Events in this cluster/);
+  assert.match(prompt, /bash: rm -rf/);
+  assert.match(prompt, /Teaching hints to weave/);
+  assert.match(prompt, /never label/i);
+});
+
+test('renderClusterWithLLM returns null when LLM produces empty text', async () => {
+  const empty = async ({ onEvent }) => {
+    onEvent({ type: 'done' });
+  };
+  const cluster = {
+    events: [makeEvent(0, { data: { command: 'ls' } })]
+  };
+  const prose = await renderClusterWithLLM(cluster, { streamChatImpl: empty });
+  assert.equal(prose, null);
+});

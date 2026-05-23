@@ -1128,24 +1128,38 @@ def deliberate_enabled() -> bool:
 
 
 def deliberate_record_only_enabled() -> bool:
-    """Record-only mode keeps analysis/logging but removes execution gating."""
+    """Return True when the hook must never emit `permissionDecision: block`.
+
+    `mode` is the authoritative knob:
+      - observe / teach  -> True (never block)
+      - block+teach      -> False (block only on HIGH risk, handled by callers)
+
+    `recordOnly` is the legacy synonym, used when `mode` is absent. Default
+    behavior (no config at all) is non-blocking, matching the new product
+    contract: Deliberate is a narrator first, a gate only when explicitly
+    asked.
+    """
     try:
         deliberate = _load_config().get("deliberate", {}) or {}
 
-        # Primary toggle.
+        # `mode` is authoritative when present.
+        mode = deliberate.get("mode")
+        if isinstance(mode, str):
+            normalized = mode.strip().lower().replace("_", "-").replace(" ", "")
+            if normalized in ("observe", "teach", "record-only", "record", "log-only"):
+                return True
+            if normalized in ("block+teach", "block-and-teach", "block"):
+                return False
+
+        # Legacy fall-back: explicit recordOnly flag.
         value = deliberate.get("recordOnly")
         if isinstance(value, bool):
             return value
-
-        # Compatibility: allow mode strings if users/script set them directly.
-        mode = deliberate.get("mode")
-        if isinstance(mode, str):
-            normalized = mode.strip().lower().replace("_", "-")
-            if normalized in ("record-only", "record", "observe", "log-only"):
-                return True
     except Exception:
         pass
-    return False
+
+    # No config at all -> default to non-blocking.
+    return True
 
 
 def deliberate_explain_everything_enabled() -> bool:

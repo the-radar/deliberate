@@ -41,10 +41,20 @@ const DEFAULT_CONFIG = {
   deliberate: {
     enabled: true,
 
-    // Record-only mode keeps analysis + logging active, but never asks/blocks
-    // commands in PreToolUse. This is useful for high-velocity sessions where
-    // the user wants full auditability without execution interruptions.
-    recordOnly: false,
+    // Interaction mode. Authoritative knob for how aggressive Deliberate is:
+    //   - "observe"     : log only, no LLM narration, no blocking
+    //   - "teach"       : log + LLM-narrated timeline, no blocking (default)
+    //   - "block+teach" : teach mode PLUS PreToolUse blocks on HIGH-risk only
+    //
+    // Default is "teach" because non-blocking + narrated is where most users
+    // want to live; "block+teach" is opt-in for paranoid / production work.
+    mode: 'teach',
+
+    // Record-only mode is the legacy synonym for "any mode that does not block".
+    // Default flipped to true so PreToolUse never interrupts Claude Code unless
+    // the user explicitly switches to block+teach. The hook reads `mode` first
+    // and falls back to this flag when `mode` is absent on older configs.
+    recordOnly: true,
 
     // Explain-everything mode disables the default trivial command skip list so
     // Deliberate can narrate the full command stream in-session.

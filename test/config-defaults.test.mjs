@@ -25,7 +25,10 @@ test('default config exposes web search + auto approve settings', async () => {
     const loaded = cfg.loadConfig();
 
     assert.equal(loaded.deliberate.enabled, true);
-    assert.equal(loaded.deliberate.recordOnly, false);
+    // Default is "teach" (non-blocking, narrated). recordOnly is the legacy
+    // synonym; both must agree that PreToolUse does not interrupt by default.
+    assert.equal(loaded.deliberate.mode, 'teach');
+    assert.equal(loaded.deliberate.recordOnly, true);
     assert.equal(loaded.deliberate.explainEverything, false);
     assert.equal(loaded.deliberate.webSearch.enabled, true);
     assert.deepEqual(loaded.deliberate.webSearch.sources, ['npm', 'pypi', 'github', 'gitlab']);

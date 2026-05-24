@@ -570,21 +570,28 @@ export async function runTui(options = {}) {
 
   const computeLayout = () => {
     const total = typeof screen.height === 'number' ? screen.height : 40;
-    const detailsHeight = Math.max(10, Math.min(20, Math.floor(total * 0.4)));
+    // Prose timeline owns the top region. Header + footer stack at the bottom.
+    // detailsHeight is left at 0 since the details pane is hidden in prose view;
+    // kept in the return shape so existing references compile until the pane
+    // is pruned end-to-end.
+    const detailsHeight = 0;
     const listHeight = Math.max(6, total - HEADER_HEIGHT - FOOTER_HEIGHT - detailsHeight);
     return {
-      listTop: HEADER_HEIGHT,
+      listTop: 0,
       listHeight,
-      detailsTop: HEADER_HEIGHT + listHeight,
+      detailsTop: 0,
       detailsHeight
     };
   };
 
   let layout = computeLayout();
 
+  // Header lives ABOVE the footer at the bottom of the screen. The prose
+  // timeline owns the full top region — putting status/nav at the top breaks
+  // continuity while scrolling the narrative.
   const header = blessed.box({
     parent: screen,
-    top: 0,
+    bottom: FOOTER_HEIGHT,
     left: 0,
     height: HEADER_HEIGHT,
     width: '100%',
@@ -667,14 +674,12 @@ export async function runTui(options = {}) {
     const serverDot = state.serverOk ? '●' : '○';
     const followLabel = state.follow ? 'follow' : 'paused';
     const enabledLabel = state.deliberateOn ? 'On' : 'Off';
-    const viewLabel = state.viewMode === 'review' ? 'Needs review' : 'Timeline';
     const modeLabel = state.mode.toUpperCase();
-    const behaviorLabel = `mode ${modeLabel}`;
     const coverageLabel = state.explainEverything ? 'everything' : 'high-signal';
 
-    const line1 = `Deliberate ${enabledLabel} • ${viewLabel} • waiting ${state.pendingCount} • session ${sessionLabel}`;
+    const line1 = `Deliberate ${enabledLabel} • mode ${modeLabel} • session ${sessionLabel}`;
     const line2 = `seen ${counts.total} • safe ${counts.safe} • moderate ${counts.moderate} • dangerous ${counts.dangerous}`;
-    const line3 = `mode ${behaviorLabel} • coverage ${coverageLabel} • server ${serverDot} • ${followLabel}`;
+    const line3 = `coverage ${coverageLabel} • server ${serverDot} • ${followLabel}`;
     const line4 = state.statusMessage ? state.statusMessage : '';
 
     header.setContent([line1, line2, line3, line4].join('\n'));

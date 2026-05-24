@@ -87,7 +87,7 @@ const HOOKS = [
     timeout: 5
   },
 
-  // ---- Discipline hooks (AelosX unification, 2026-05-23) ----
+  // ---- Discipline hooks (discipline rollup, 2026-05-23) ----
   // All four short-circuit cleanly when `deliberate hooks off` / paused /
   // bypass is set; default state is "strict".
 

@@ -10,7 +10,7 @@
  *   - If the daemon is unreachable AND .git is present -> fail-closed with a
  *     clear debug note for Claude.
  *   - If there's no written spec (no `docs/` and no spec-mapping.json) -> ask
- *     Claude to interview the user (the AelosX "user-message-as-spec" case).
+ *     Claude to interview the user (the discipline note "user-message-as-spec" case).
  *   - Otherwise forward the payload to the daemon and pass its verdict through.
  *
  * Returns:
@@ -46,7 +46,7 @@ export function isStringentProject(cwd) {
 
 /**
  * Heuristic: does the project carry any written spec we can grep against?
- * If not, the AelosX note says we should interview the user instead of
+ * If not, the cross-project discipline note says we should interview the user instead of
  * blocking.
  *
  * @param {string} cwd
@@ -129,7 +129,7 @@ export function callDaemon(payload) {
 
 /**
  * Top-level evaluator. Implements the stringency + interview rules from the
- * AelosX note's locked decisions.
+ * discipline note's locked decisions.
  *
  * @param {{ filePath: string, after: string, cwd: string }} args
  * @returns {Promise<{ decision: string, message: string, daemonReachable: boolean }>}

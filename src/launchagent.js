@@ -1,7 +1,7 @@
 /**
  * LaunchAgent management for the spec_watcher_daemon (macOS only).
  *
- * The AelosX-note unification needs the daemon at `~/.claude/hooks/
+ * The discipline-note unification needs the daemon at `~/.claude/hooks/
  * spec_watcher_daemon.py` to be alive whenever Claude Code runs. A LaunchAgent
  * at `~/Library/LaunchAgents/com.bobola.nospec-drift.plist` keeps it running
  * across reboots and restarts it on crash.

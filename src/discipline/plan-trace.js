@@ -1,7 +1,7 @@
 /**
  * Plan-trace enforcement (PostToolUse on Write|Edit|MultiEdit).
  *
- * The AelosX note's contract: every NEW function/component/class definition
+ * The discipline note's contract: every NEW function/component/class definition
  * in a code file must carry a comment of shape
  *     // Plan: <doc>§"<section>" · Issue: #<N>
  * adjacent to it. Missing trace -> hard block the tool call.

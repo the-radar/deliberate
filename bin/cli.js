@@ -315,7 +315,7 @@ program
 // `deliberate hooks ...`
 //
 // Single subcommand surface that owns the discipline kill-switch (per the
-// AelosX note's locked decision: "no editing JSON by hand"). All actions
+// discipline note's locked decision: "no editing JSON by hand"). All actions
 // append to ~/.deliberate/discipline-audit.jsonl so nothing is silent.
 // ---------------------------------------------------------------------------
 const hooks = program

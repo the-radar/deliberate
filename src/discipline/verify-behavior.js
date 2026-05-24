@@ -1,7 +1,7 @@
 /**
  * Verify-behavior reminder (Stop hook).
  *
- * Per the AelosX note's "verify experience, not mechanism" lesson, this Stop
+ * Per the discipline note's "verify experience, not mechanism" lesson, this Stop
  * hook injects an iron-law reminder when the agent is about to claim done.
  * No LLM call — the reminder is the discipline.
  *

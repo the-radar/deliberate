@@ -1,7 +1,7 @@
 /**
  * Append-only audit log for discipline state changes.
  *
- * The AelosX note's contract: "No silent disabling." Every pause/off/bypass
+ * The discipline note's contract: "No silent disabling." Every pause/off/bypass
  * action lands here as a JSONL line so the agent (and the user) can see when
  * the safety net was lowered.
  *

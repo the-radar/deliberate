@@ -5,7 +5,7 @@
  * so the agent does not drift off the loop between turns. Pure string — no
  * LLM call. Output goes back to Claude Code as `additionalContext`.
  *
- * Default message is intentionally short and verb-shaped (per the AelosX note's
+ * Default message is intentionally short and verb-shaped (per the discipline note's
  * "verify behavior, not mechanism" criticism). It can be overridden via
  * `~/.deliberate/discipline-anxiety.txt` if the user wants project-specific
  * wording.

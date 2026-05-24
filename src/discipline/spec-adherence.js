@@ -294,7 +294,10 @@ export function findProjectRoot(cwd) {
  */
 export async function runDriftCheck({ filePath, after, specs }, opts = {}) {
   const impl = typeof opts.streamChatImpl === 'function' ? opts.streamChatImpl : streamChat;
-  const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 30_000;
+  // 120s — large local models (35B class) can take a minute to first token
+  // plus another minute to land the full JSON verdict. Default 30s was too
+  // tight; users can still override via opts.timeoutMs in tests.
+  const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 120_000;
 
   const messages = buildDriftMessages(filePath, after, specs);
 

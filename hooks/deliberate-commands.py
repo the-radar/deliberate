@@ -2177,13 +2177,72 @@ def extract_inline_content(command: str) -> str | None:
     return None
 
 
+def _call_llm_via_deliberate_cli(prompt: str, timeout_seconds: int) -> str | None:
+    """Pipe a prompt to `node bin/cli.js llm chat` and return assembled text.
+
+    Plan: docs/plans/wire-llm-to-hooks.md§"Python-side change (separate)" · Issue: #10
+
+    Uses deliberate's provider-agnostic streamChat path so this hook works
+    against Dexter / Ollama / openai-compatible / etc. (#3). Returns None on
+    any failure so the caller falls back to local-rule analysis.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    cli = repo_root / "bin" / "cli.js"
+    if not cli.exists():
+        debug(f"deliberate cli not found at {cli}")
+        return None
+
+    req = json.dumps({
+        "prompt": prompt,
+        "maxTokens": 1024,
+        "timeoutMs": max(5_000, timeout_seconds * 1_000),
+    })
+    try:
+        proc = subprocess.run(
+            ["node", str(cli), "llm", "chat"],
+            input=req.encode("utf-8"),
+            capture_output=True,
+            timeout=timeout_seconds + 5,
+        )
+    except FileNotFoundError:
+        debug("node not on PATH; cannot call deliberate llm chat")
+        return None
+    except subprocess.TimeoutExpired:
+        debug("deliberate llm chat exceeded subprocess timeout")
+        return None
+    except Exception as e:
+        debug(f"deliberate llm chat threw: {e}")
+        return None
+
+    if proc.returncode != 0:
+        debug(f"deliberate llm chat non-zero exit: {proc.returncode}")
+        return None
+    try:
+        body = json.loads(proc.stdout.decode("utf-8", errors="replace") or "{}")
+    except Exception as e:
+        debug(f"deliberate llm chat unparseable response: {e}")
+        return None
+    if not body.get("ok"):
+        debug(f"deliberate llm chat failed: {body.get('error', 'unknown')}")
+        return None
+    text = body.get("text", "")
+    return text if isinstance(text, str) and text.strip() else None
+
+
 def call_llm_for_explanation(
     command: str,
     pre_assessment: dict | None = None,
     script_content: str | None = None,
     evidence: List[dict] | None = None,
 ) -> dict | None:
-    """Call the configured LLM to explain the command using Claude Agent SDK."""
+    """Call the configured LLM to explain the command.
+
+    Two paths:
+      - provider == 'claude-subscription' -> Claude Agent SDK (legacy)
+      - any other provider -> deliberate's streamChat via `deliberate llm chat`
+        (subprocess call into Node so we honour the user's bring-your-own
+        gateway from #3)
+    """
     debug("call_llm_for_explanation started")
 
     llm_config = load_llm_config()
@@ -2193,11 +2252,6 @@ def call_llm_for_explanation(
 
     provider = llm_config["provider"]
     debug(f"LLM provider: {provider}")
-
-    # Only use SDK for claude-subscription provider
-    if provider != "claude-subscription":
-        debug("Non-OAuth provider - falling back to direct API")
-        return None
 
     # Build context from local pre-assessment if available
     context_note = ""
@@ -2261,6 +2315,24 @@ If you're uncertain about what something does, say what you don't know and ask a
 Format your response as:
 RISK: [SAFE|MODERATE|DANGEROUS]
 EXPLANATION: [your explanation including any security notes]"""
+
+    # New path: provider-agnostic LLM via deliberate's streamChat. Used for
+    # every provider that isn't the legacy claude-subscription SDK.
+    if provider != "claude-subscription":
+        content = _call_llm_via_deliberate_cli(prompt, timeout_seconds=TIMEOUT_SECONDS)
+        if not content:
+            return None
+        risk = "MODERATE"
+        explanation = content
+        if "RISK:" in content and "EXPLANATION:" in content:
+            parts = content.split("EXPLANATION:")
+            risk_line = parts[0]
+            explanation = parts[1].strip() if len(parts) > 1 else content
+            if "DANGEROUS" in risk_line:
+                risk = "DANGEROUS"
+            elif "SAFE" in risk_line:
+                risk = "SAFE"
+        return {"risk": risk, "explanation": explanation}
 
     try:
         # Create temp file for SDK script

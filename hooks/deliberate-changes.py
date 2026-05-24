@@ -355,8 +355,54 @@ def assess_change_risk_by_rules(
     return None
 
 
+def _call_llm_via_deliberate_cli(prompt: str, timeout_seconds: int) -> str | None:
+    """Subprocess into `node bin/cli.js llm chat` for provider-agnostic LLM calls.
+
+    Plan: docs/plans/wire-llm-to-hooks.md§"Python-side change (separate)" · Issue: #10
+    """
+    import subprocess as _sp
+    repo_root = Path(__file__).resolve().parent.parent
+    cli = repo_root / "bin" / "cli.js"
+    if not cli.exists():
+        debug(f"deliberate cli not found at {cli}")
+        return None
+    req = json.dumps({
+        "prompt": prompt,
+        "maxTokens": 1024,
+        "timeoutMs": max(5_000, timeout_seconds * 1_000),
+    })
+    try:
+        proc = _sp.run(
+            ["node", str(cli), "llm", "chat"],
+            input=req.encode("utf-8"),
+            capture_output=True,
+            timeout=timeout_seconds + 5,
+        )
+    except Exception as e:
+        debug(f"deliberate llm chat threw: {e}")
+        return None
+    if proc.returncode != 0:
+        debug(f"deliberate llm chat non-zero exit: {proc.returncode}")
+        return None
+    try:
+        body = json.loads(proc.stdout.decode("utf-8", errors="replace") or "{}")
+    except Exception:
+        return None
+    if not body.get("ok"):
+        debug(f"deliberate llm chat failed: {body.get('error', 'unknown')}")
+        return None
+    text = body.get("text", "")
+    return text if isinstance(text, str) and text.strip() else None
+
+
 def call_llm_for_explanation(file_path: str, operation: str, content: str, pre_assessment: dict | None = None) -> dict | None:
-    """Call the configured LLM to explain the changes using Claude Agent SDK."""
+    """Call the configured LLM to explain a file change.
+
+    Two paths:
+      - provider == 'claude-subscription' -> Claude Agent SDK (legacy)
+      - any other provider -> deliberate's streamChat via `deliberate llm chat`
+        (so we honour the user's bring-your-own gateway from #3)
+    """
 
     llm_config = load_llm_config()
     if not llm_config:
@@ -364,11 +410,6 @@ def call_llm_for_explanation(file_path: str, operation: str, content: str, pre_a
         return None
 
     provider = llm_config["provider"]
-
-    # Only use SDK for claude-subscription provider
-    if provider != "claude-subscription":
-        debug("Non-OAuth provider - falling back to direct API")
-        return None
 
     file_name = os.path.basename(file_path)
 
@@ -415,6 +456,24 @@ Consider:
 Format your response as:
 RISK: [SAFE|MODERATE|DANGEROUS]
 EXPLANATION: [your explanation including any security notes]"""
+
+    # New path: provider-agnostic LLM via deliberate's streamChat for any
+    # provider that isn't the legacy claude-subscription SDK.
+    if provider != "claude-subscription":
+        content = _call_llm_via_deliberate_cli(prompt, timeout_seconds=TIMEOUT_SECONDS)
+        if not content:
+            return None
+        risk = "MODERATE"
+        explanation = content
+        if "RISK:" in content and "EXPLANATION:" in content:
+            parts = content.split("EXPLANATION:")
+            risk_line = parts[0]
+            explanation = parts[1].strip() if len(parts) > 1 else content
+            if "DANGEROUS" in risk_line:
+                risk = "DANGEROUS"
+            elif "SAFE" in risk_line:
+                risk = "SAFE"
+        return {"risk": risk, "explanation": explanation}
 
     try:
         # Use Claude Agent SDK

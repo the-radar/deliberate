@@ -235,7 +235,8 @@ function buildRequestHeaders(llm) {
  *   context: { command, risk, explanation, consequences }
  * }
  */
-export async function streamChat({ messages, context = {}, maxTokens, onEvent, signal } = {}) {
+// Plan: docs/plans/wire-llm-to-hooks.md§"deliberate llm chat CLI" · Issue: #10
+export async function streamChat({ messages, context = {}, maxTokens, onEvent, signal, timeoutMs } = {}) {
   if (!isMessageArray(messages) || messages.length < 1) {
     throw new Error('Missing required field: messages (array)');
   }
@@ -258,7 +259,8 @@ export async function streamChat({ messages, context = {}, maxTokens, onEvent, s
   }
 
   const abortController = new AbortController();
-  const timeout = setTimeout(() => abortController.abort(), DEFAULT_TIMEOUT_MS);
+  const effectiveTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : DEFAULT_TIMEOUT_MS;
+  const timeout = setTimeout(() => abortController.abort(), effectiveTimeout);
 
   const onAbort = () => abortController.abort();
   if (signal) {

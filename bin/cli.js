@@ -449,6 +449,25 @@ la
     process.exitCode = r.ok ? 0 : 1;
   });
 
+// ---------------------------------------------------------------------------
+// `deliberate llm ...`
+//
+// Provider-agnostic LLM call surface used by Python hooks (commands +
+// changes) so bash/write events get a real LLM explanation through the
+// user's configured gateway, not a fallback to local rules.
+// ---------------------------------------------------------------------------
+const llm = program
+  .command('llm')
+  .description('Provider-agnostic LLM helpers used by deliberate hooks');
+
+llm
+  .command('chat')
+  .description('Read a JSON request from stdin, call the configured LLM, write a JSON response')
+  .action(async () => {
+    const { runLlmCli } = await import('../src/llm-cli.js');
+    await runLlmCli();
+  });
+
 la
   .command('status')
   .description('Report whether the LaunchAgent is installed and loaded')

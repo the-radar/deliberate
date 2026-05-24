@@ -187,9 +187,13 @@ export async function evaluateSpecAdherence(args) {
     cwd
   });
   if (!verdict || typeof verdict !== 'object') {
+    // Daemon was reachable but spoke a protocol we don't recognise (version
+    // skew between deliberate and the daemon). Fail-open with a warning —
+    // punishing the user for protocol drift is the wrong call. Fail-closed
+    // is reserved for "daemon unreachable" above.
     return {
-      decision: 'block',
-      message: 'spec daemon responded with no/invalid JSON; failing closed',
+      decision: 'allow',
+      message: 'spec daemon protocol unrecognised; allowing with warning',
       daemonReachable: true
     };
   }

@@ -185,3 +185,57 @@ test('hasAdjacentTrace requires the trace within 3 lines above', () => {
   const def = { line: 5, name: 'farAway' };
   assert.equal(hasAdjacentTrace(src.split('\n'), def), false);
 });
+
+import {
+  runDriftCheck, extractJsonObject, findProjectRoot
+} from '../src/discipline/spec-adherence.js';
+
+test('extractJsonObject pulls a balanced object out of fenced text', () => {
+  assert.equal(extractJsonObject('garbage {"a":1} trailing'), '{"a":1}');
+  assert.equal(extractJsonObject('```json\n{"x":{"y":2}}\n```'), '{"x":{"y":2}}');
+  assert.equal(extractJsonObject('no object here'), null);
+});
+
+test('extractJsonObject handles strings with braces inside', () => {
+  assert.equal(extractJsonObject('prelude {"a":"has } brace","b":1}'), '{"a":"has } brace","b":1}');
+});
+
+test('runDriftCheck parses a clean drift_detected:true verdict', async () => {
+  const fakeStream = async ({ onEvent }) => {
+    onEvent({ type: 'token', text: '{"drift_detected":true,"issues":[{"summary":"x","recommendation":"y"}],"confidence":"high"}' });
+    onEvent({ type: 'done' });
+  };
+  const v = await runDriftCheck({
+    filePath: 'src/foo.ts',
+    after: 'export function f(){}',
+    specs: [{ spec_file: 'docs/x.md', section: '## Foo', start_line: 1, end_line: 5, content: 'foo must be y' }]
+  }, { streamChatImpl: fakeStream });
+  assert.equal(v.drift_detected, true);
+  assert.equal(v.issues.length, 1);
+});
+
+test('runDriftCheck reports {__error} when LLM errors out', async () => {
+  const erroring = async ({ onEvent }) => { onEvent({ type: 'error', message: 'upstream 503' }); };
+  const v = await runDriftCheck({
+    filePath: 'src/foo.ts', after: '', specs: [{ spec_file: 'x', section: 's', start_line: 1, end_line: 1, content: '' }]
+  }, { streamChatImpl: erroring });
+  assert.ok(v && v.__error, 'expected __error sentinel');
+  assert.match(v.__error, /upstream/);
+});
+
+test('runDriftCheck returns null on unparseable response (clean stream, no JSON)', async () => {
+  const garbage = async ({ onEvent }) => {
+    onEvent({ type: 'token', text: 'this is not json at all' });
+    onEvent({ type: 'done' });
+  };
+  const v = await runDriftCheck({
+    filePath: 'src/foo.ts', after: '', specs: [{ spec_file: 'x', section: 's', start_line: 1, end_line: 1, content: '' }]
+  }, { streamChatImpl: garbage });
+  assert.equal(v, null);
+});
+
+test('findProjectRoot walks up to nearest .git', () => {
+  // This test repo has .git at /Users/h4tch1ing/Documents/deliberate
+  const r = findProjectRoot(path.join(process.cwd(), 'src', 'discipline'));
+  assert.ok(r && r.endsWith('deliberate'), `expected to find deliberate root, got: ${r}`);
+});

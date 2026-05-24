@@ -605,23 +605,20 @@ export async function runTui(options = {}) {
   // bound but operate against the most-recent visible cluster instead of a
   // selected row; they are no-ops in observe/teach until the actions story
   // lands in a follow-up.
+  // No border, no top label — the box label would render at the TOP of the
+  // pane, which contradicts the "everything that's chrome lives at the bottom"
+  // outcome. Scroll lives in the box; nav lives in the bottom header + footer.
   const list = blessed.box({
     parent: screen,
     top: layout.listTop,
     left: 0,
     width: '100%',
-    // Take the whole middle area; details pane is hidden in prose mode.
     height: layout.listHeight + layout.detailsHeight,
     keys: true,
     vi: true,
     mouse: true,
     scrollable: true,
     alwaysScroll: true,
-    border: 'line',
-    label: ' timeline ',
-    style: {
-      border: { fg: 'gray' }
-    },
     scrollbar: { ch: ' ', track: { bg: 'gray' }, style: { bg: 'white' } },
     tags: false
   });
@@ -783,7 +780,7 @@ export async function runTui(options = {}) {
 
   const renderList = () => {
     const clusters = clusterEvents(filtered);
-    list.setLabel(` timeline (${state.mode}) `);
+    // No label — mode lives in the bottom header (renderHeader).
     list.setContent(staticClustersText(clusters));
     // Auto-scroll to bottom (newest cluster is at the top after reverse).
     list.setScrollPerc(0);

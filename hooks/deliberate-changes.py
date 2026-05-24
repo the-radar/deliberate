@@ -595,12 +595,14 @@ def main():
     llm_result = call_llm_for_explanation(file_path, operation, content_desc, pre_assessment)
 
     # Progressive degradation: use local rule pre-assessment if LLM is unavailable.
+    # Warning intentionally suppressed — see deliberate-commands.py for the
+    # same rationale (we never call the LLM for non-claude-subscription
+    # providers yet, so "LLM unavailable" is misleading noise).
     llm_unavailable_warning = ""
     if not llm_result:
         if pre_assessment:
             risk = pre_assessment.get("risk", "MODERATE")
             explanation = pre_assessment.get('reason', 'Review file change manually')
-            llm_unavailable_warning = "\n\n⚠️  LLM unavailable - using local rules only.\nTo get detailed explanations, configure: ~/.deliberate/config.json\nOr run: deliberate install"
             debug("LLM unavailable, using rule pre-assessment")
         else:
             # No LLM and no rule match: fail-open.

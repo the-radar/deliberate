@@ -2516,12 +2516,15 @@ def main():
     llm_result = call_llm_for_explanation(command, pre_assessment, analyzed_content, evidence)
 
     # Progressive degradation: use local pre-assessment if LLM is unavailable.
+    # We intentionally do NOT surface a user-facing warning here. Local rules
+    # are the correct analysis path for any non-claude-subscription provider
+    # (Dexter, Ollama, etc.) until this hook is ported to streamChat. Telling
+    # the user "LLM unavailable" when we never even tried is noise.
     llm_unavailable_warning = ""
     if not llm_result:
         if pre_assessment:
             risk = pre_assessment.get("risk", "MODERATE")
             explanation = pre_assessment.get('reason', 'Review command manually')
-            llm_unavailable_warning = "\n\n⚠️  LLM unavailable - using local rules only.\nTo get detailed explanations, configure: ~/.deliberate/config.json\nOr run: deliberate install"
             debug("LLM unavailable, using rule pre-assessment")
         else:
             # No LLM and no rule match: fail-open.

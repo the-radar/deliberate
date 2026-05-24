@@ -657,12 +657,18 @@ def main():
     # Warning intentionally suppressed — see deliberate-commands.py for the
     # same rationale (we never call the LLM for non-claude-subscription
     # providers yet, so "LLM unavailable" is misleading noise).
+    # Fail loud when the LLM was meant to run but didn't.
     llm_unavailable_warning = ""
     if not llm_result:
-        if pre_assessment:
-            risk = pre_assessment.get("risk", "MODERATE")
-            explanation = pre_assessment.get('reason', 'Review file change manually')
-            debug("LLM unavailable, using rule pre-assessment")
+        rule_risk = pre_assessment.get("risk", "MODERATE") if pre_assessment else "MODERATE"
+        risk = rule_risk
+        explanation = (
+            "⚠ LLM unreachable — analysis SKIPPED. "
+            f"Local rules say risk={rule_risk}"
+            + (f": {pre_assessment.get('reason')}" if pre_assessment and pre_assessment.get('reason') else "")
+            + ". Run `deliberate hooks status` and verify the configured gateway is responding."
+        )
+        debug("LLM failed; surfacing fail-loud event")
         else:
             # No LLM and no rule match: fail-open.
             debug("No LLM and no rule pre-assessment, allowing file change")

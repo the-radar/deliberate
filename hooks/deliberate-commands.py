@@ -2587,21 +2587,22 @@ def main():
     broadcast_progress(session_id, analysis_id, command, cwd, "llm", "Drafting explanation")
     llm_result = call_llm_for_explanation(command, pre_assessment, analyzed_content, evidence)
 
-    # Progressive degradation: use local pre-assessment if LLM is unavailable.
-    # We intentionally do NOT surface a user-facing warning here. Local rules
-    # are the correct analysis path for any non-claude-subscription provider
-    # (Dexter, Ollama, etc.) until this hook is ported to streamChat. Telling
-    # the user "LLM unavailable" when we never even tried is noise.
+    # Fail loud when the LLM was meant to run but didn't. The user explicitly
+    # asked: no dressing up local-rule labels as analysis. The explanation
+    # field gets a ⚠ prefix so the pane shows it as a degraded-discipline
+    # event, not a confident verdict.
     llm_unavailable_warning = ""
     if not llm_result:
-        if pre_assessment:
-            risk = pre_assessment.get("risk", "MODERATE")
-            explanation = pre_assessment.get('reason', 'Review command manually')
-            debug("LLM unavailable, using rule pre-assessment")
-        else:
-            # No LLM and no rule match: fail-open.
-            debug("No LLM and no rule pre-assessment, allowing command")
-            sys.exit(0)
+        rule_risk = pre_assessment.get("risk", "MODERATE") if pre_assessment else "MODERATE"
+        risk = rule_risk
+        explanation = (
+            "⚠ LLM unreachable — analysis SKIPPED. "
+            "Local rules say "
+            f"risk={rule_risk}"
+            + (f": {pre_assessment.get('reason')}" if pre_assessment and pre_assessment.get('reason') else "")
+            + ". Run `deliberate hooks status` and verify the configured gateway is responding."
+        )
+        debug("LLM failed; surfacing fail-loud event")
     else:
         risk = llm_result["risk"]
         explanation = llm_result["explanation"]

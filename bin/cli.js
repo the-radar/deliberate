@@ -416,4 +416,50 @@ hooks
     await runHookEval(options.kind);
   });
 
+// ---------------------------------------------------------------------------
+// `deliberate launchagent ...`
+//
+// Manages the macOS LaunchAgent that keeps spec_watcher_daemon alive across
+// reboots — needed by the spec-adherence discipline hook.
+// ---------------------------------------------------------------------------
+const la = program
+  .command('launchagent')
+  .description('Manage the spec_watcher_daemon LaunchAgent (macOS)');
+
+la
+  .command('install')
+  .description('Write and load the LaunchAgent so the daemon survives reboots')
+  .option('--daemon <path>', 'Override path to spec_watcher_daemon.py')
+  .option('--python <path>', 'Override python interpreter (default /usr/bin/python3)')
+  .action(async (options) => {
+    const { installLaunchAgent } = await import('../src/launchagent.js');
+    const r = installLaunchAgent({ daemonPath: options.daemon, python: options.python });
+    console.log(r.message);
+    console.log(`plist: ${r.plistPath}`);
+    process.exitCode = r.ok ? 0 : 1;
+  });
+
+la
+  .command('uninstall')
+  .description('Unload and remove the LaunchAgent')
+  .action(async () => {
+    const { uninstallLaunchAgent } = await import('../src/launchagent.js');
+    const r = uninstallLaunchAgent();
+    console.log(r.message);
+    process.exitCode = r.ok ? 0 : 1;
+  });
+
+la
+  .command('status')
+  .description('Report whether the LaunchAgent is installed and loaded')
+  .action(async () => {
+    const { launchAgentStatus } = await import('../src/launchagent.js');
+    const s = launchAgentStatus();
+    console.log(`supported:  ${s.supported}`);
+    console.log(`label:      ${s.label}`);
+    console.log(`plist:      ${s.plistPath}`);
+    console.log(`plistExists: ${s.plistExists ? 'yes' : 'no'}`);
+    console.log(`loaded:     ${s.loaded === null ? 'unknown' : (s.loaded ? 'yes' : 'no')}`);
+  });
+
 program.parse();

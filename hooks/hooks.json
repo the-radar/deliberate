@@ -57,6 +57,52 @@
           }
         ]
       }
+    ],
+    "PreToolUse:spec-adherence": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/deliberate-spec-adherence.py\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse:plan-trace": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/deliberate-plan-trace.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/deliberate-anxiety.py\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/deliberate-verify-behavior.py\"",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

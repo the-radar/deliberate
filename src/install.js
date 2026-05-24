@@ -85,6 +85,45 @@ const HOOKS = [
     dest: 'deliberate-session-end.py',
     event: 'SessionEnd',
     timeout: 5
+  },
+
+  // ---- Discipline hooks (AelosX unification, 2026-05-23) ----
+  // All four short-circuit cleanly when `deliberate hooks off` / paused /
+  // bypass is set; default state is "strict".
+
+  // Spec-adherence: catch semantic drift before writes happen.
+  {
+    source: 'deliberate-spec-adherence.py',
+    dest: 'deliberate-spec-adherence.py',
+    event: 'PreToolUse',
+    matcher: 'Write|Edit|MultiEdit',
+    timeout: 30
+  },
+
+  // Plan-trace: require `// Plan: <doc>§"<section>" · Issue: #<N>` adjacent
+  // to every new function/component/class definition on write.
+  {
+    source: 'deliberate-plan-trace.py',
+    dest: 'deliberate-plan-trace.py',
+    event: 'PostToolUse',
+    matcher: 'Write|Edit|MultiEdit',
+    timeout: 10
+  },
+
+  // Anxiety: re-inject the issues-loop discipline at the top of every prompt.
+  {
+    source: 'deliberate-anxiety.py',
+    dest: 'deliberate-anxiety.py',
+    event: 'UserPromptSubmit',
+    timeout: 5
+  },
+
+  // Verify-behavior: inject the evidence-before-claims reminder at session stop.
+  {
+    source: 'deliberate-verify-behavior.py',
+    dest: 'deliberate-verify-behavior.py',
+    event: 'Stop',
+    timeout: 5
   }
 ];
 

@@ -311,4 +311,109 @@ program
     if (options.dryRun) console.log('(dry run — no files were removed)');
   });
 
+// ---------------------------------------------------------------------------
+// `deliberate hooks ...`
+//
+// Single subcommand surface that owns the discipline kill-switch (per the
+// AelosX note's locked decision: "no editing JSON by hand"). All actions
+// append to ~/.deliberate/discipline-audit.jsonl so nothing is silent.
+// ---------------------------------------------------------------------------
+const hooks = program
+  .command('hooks')
+  .description('Manage deliberate discipline hooks (spec-adherence, anxiety, verify-behavior, plan-trace)');
+
+hooks
+  .command('status')
+  .description('Show current discipline state, paused-until, bypass list, and recent audit entries')
+  .action(async () => {
+    const { readState } = await import('../src/discipline/state.js');
+    const { readAudit } = await import('../src/discipline/audit.js');
+    const s = readState();
+    console.log(`state:      ${s.state}`);
+    console.log(`pauseUntil: ${s.pauseUntil || '—'}`);
+    console.log(`bypass:     ${s.bypass.length ? s.bypass.join(', ') : '—'}`);
+    console.log('');
+    const log = readAudit({ maxEntries: 5 });
+    if (log.length === 0) {
+      console.log('audit: (no entries yet)');
+    } else {
+      console.log('audit (most recent 5):');
+      for (const entry of log) {
+        const reason = entry.reason ? ` — ${entry.reason}` : '';
+        console.log(`  ${entry.timestamp}  ${entry.action}${reason}`);
+      }
+    }
+  });
+
+hooks
+  .command('strict')
+  .description('Enforce all discipline hooks (default). Logs the change.')
+  .action(async () => {
+    const { writeState, readState } = await import('../src/discipline/state.js');
+    const current = readState();
+    writeState({ ...current, state: 'strict', pauseUntil: null }, { reason: 'cli strict' });
+    console.log('discipline: strict (all hooks enforced)');
+  });
+
+hooks
+  .command('loose')
+  .description('Switch discipline to advisory mode: hooks log but do not block. Logs the change.')
+  .action(async () => {
+    const { writeState, readState } = await import('../src/discipline/state.js');
+    const current = readState();
+    writeState({ ...current, state: 'loose', pauseUntil: null }, { reason: 'cli loose' });
+    console.log('discipline: loose (advisory; hooks log but do not block)');
+  });
+
+hooks
+  .command('off')
+  .description('Disable all discipline hooks until explicitly re-enabled. Logs the change.')
+  .action(async () => {
+    const { writeState, readState } = await import('../src/discipline/state.js');
+    const current = readState();
+    writeState({ ...current, state: 'off', pauseUntil: null }, { reason: 'cli off' });
+    console.log('discipline: off (no hooks fire — agent should behave more carefully)');
+  });
+
+hooks
+  .command('pause <duration>')
+  .description('Temporarily disable all hooks for a duration like 60m, 2h, 30s, 1d. Logs the change.')
+  .action(async (duration) => {
+    const { pauseFor } = await import('../src/discipline/state.js');
+    try {
+      const persisted = pauseFor(duration, { reason: `cli pause ${duration}` });
+      console.log(`discipline: paused until ${persisted.pauseUntil}`);
+    } catch (err) {
+      console.error(`pause failed: ${err.message}`);
+      process.exitCode = 1;
+    }
+  });
+
+hooks
+  .command('bypass <hookId>')
+  .description('Skip one specific hook (spec-adherence | anxiety | verify-behavior | plan-trace). Logs the change.')
+  .action(async (hookId) => {
+    const { bypassHook } = await import('../src/discipline/state.js');
+    bypassHook(hookId, { reason: `cli bypass ${hookId}` });
+    console.log(`discipline: bypassing ${hookId} (other hooks remain enforced)`);
+  });
+
+hooks
+  .command('unbypass <hookId>')
+  .description('Stop bypassing a specific hook. Logs the change.')
+  .action(async (hookId) => {
+    const { unbypassHook } = await import('../src/discipline/state.js');
+    unbypassHook(hookId, { reason: `cli unbypass ${hookId}` });
+    console.log(`discipline: ${hookId} re-enforced`);
+  });
+
+hooks
+  .command('eval')
+  .description('Internal: evaluate one Claude Code hook payload (called from Python wrappers).')
+  .requiredOption('--kind <kind>', 'plan-trace | anxiety | verify-behavior | spec-adherence')
+  .action(async (options) => {
+    const { runHookEval } = await import('../src/discipline/eval-entry.js');
+    await runHookEval(options.kind);
+  });
+
 program.parse();

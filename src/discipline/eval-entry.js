@@ -138,10 +138,21 @@ export async function runHookEval(kind) {
   };
 
   if (result.kind === 'context-inject') {
-    response.hookSpecificOutput = {
-      hookEventName: hookId === 'anxiety' ? 'UserPromptSubmit' : 'Stop',
-      additionalContext: result.message
-    };
+    if (hookId === 'anxiety') {
+      // UserPromptSubmit does accept hookSpecificOutput.additionalContext.
+      response.hookSpecificOutput = {
+        hookEventName: 'UserPromptSubmit',
+        additionalContext: result.message
+      };
+    } else {
+      // Stop hooks do NOT accept hookSpecificOutput (schema rejects it and
+      // Claude Code surfaces a validation error to the model). Inject via
+      // systemMessage instead — that's the supported channel for Stop.
+      response.systemMessage = result.message;
+      // permissionDecision is also tool-event-only; strip on Stop to keep
+      // the payload schema-clean.
+      delete response.permissionDecision;
+    }
   }
 
   // Loose mode downgrades all blocks to advisory.

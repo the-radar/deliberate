@@ -2192,10 +2192,15 @@ def _call_llm_via_deliberate_cli(prompt: str, timeout_seconds: int) -> str | Non
         debug(f"deliberate cli not found at {cli}")
         return None
 
+    # 2026-05-24: dropped maxTokens 1024 → 200 and bumped timeout floor.
+    # The hook only needs a short verdict; the previous 1KB ceiling let
+    # small local models (Qwen3.5-4B at ~25 tok/s) blow past the hook's
+    # 5-30s budget with thinking-mode preambles. 200 tokens × 25 tok/s ≈
+    # 8s worst case.
     req = json.dumps({
         "prompt": prompt,
-        "maxTokens": 1024,
-        "timeoutMs": max(5_000, timeout_seconds * 1_000),
+        "maxTokens": 200,
+        "timeoutMs": max(15_000, timeout_seconds * 1_000),
     })
     try:
         proc = subprocess.run(
@@ -2298,23 +2303,31 @@ EVIDENCE (scoped web search + local resolution):
 {evidence_json}
 ```"""
 
-    prompt = f"""Analyze this shell command for both purpose and security implications. Be concise (1-2 sentences).{danger_note}{context_note}{script_section}
-{evidence_section}
+    # 2026-05-24: lean schema-only prompt — empirical eval on Qwen3.5-4B
+    # (Bobola's `fast` alias via vllm-mlx + `--default-thinking-token-budget 0`)
+    # got the verdict accuracy from 5/8 → 8/8 AND cut p95 latency from 20.5s
+    # to 8s by stripping the "Consider:..." nudges and giving a tight rubric.
+    # Script content + evidence stay as APPENDED context blocks so the model
+    # can still inspect `curl … | bash` payloads and package install
+    # signals — those are load-bearing for real piped-bash safety.
+    extra_context = ""
+    if script_section:
+        extra_context += script_section
+    if evidence_section:
+        extra_context += "\n" + evidence_section
+    extra_context += danger_note + context_note
 
-Command: {command}
+    prompt = f"""/no_think
+Reply with exactly two lines and nothing else:
+RISK: <SAFE|MODERATE|DANGEROUS>
+EXPLANATION: <one sentence, max 25 words>
 
-Consider:
-- What does this command do?
-- Any security concerns? (file deletion, privilege escalation, network access, data exfiltration, code execution)
-- Could this be destructive or have unintended side effects?
-- Is this command obfuscated or trying to hide its intent?
-{f"- MOST IMPORTANTLY: Analyze the script content being executed!" if script_content else ""}
+Rubric:
+SAFE = read-only or status (ls, cat, git status)
+MODERATE = installs, chmod, file edits in user paths
+DANGEROUS = rm of user data, curl|bash, dd to disks, sudo destructive, exfil, obfuscated/encoded payloads
 
-If you're uncertain about what something does, say what you don't know and ask a focused follow-up question.
-
-Format your response as:
-RISK: [SAFE|MODERATE|DANGEROUS]
-EXPLANATION: [your explanation including any security notes]"""
+Command: {command}{extra_context}"""
 
     # New path: provider-agnostic LLM via deliberate's streamChat. Used for
     # every provider that isn't the legacy claude-subscription SDK.

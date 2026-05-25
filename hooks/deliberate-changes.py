@@ -366,10 +366,12 @@ def _call_llm_via_deliberate_cli(prompt: str, timeout_seconds: int) -> str | Non
     if not cli.exists():
         debug(f"deliberate cli not found at {cli}")
         return None
+    # 2026-05-24: bound to 200 tokens + 15s floor — same reason as
+    # deliberate-commands.py. Local 4B models can't ship 1KB in 5s.
     req = json.dumps({
         "prompt": prompt,
-        "maxTokens": 1024,
-        "timeoutMs": max(5_000, timeout_seconds * 1_000),
+        "maxTokens": 200,
+        "timeoutMs": max(15_000, timeout_seconds * 1_000),
     })
     try:
         proc = _sp.run(
@@ -422,7 +424,12 @@ def call_llm_for_explanation(file_path: str, operation: str, content: str, pre_a
         context_note = f"\n\nPre-screening ({source}): {risk} - {reason}"
 
     if operation == "write":
-        prompt = f"""Analyze this file write for both purpose and security implications. Be concise (1-2 sentences).{context_note}
+        # 2026-05-24: same /no_think prefix as deliberate-commands.py so Qwen
+        # families skip thinking-mode preamble.
+        prompt = f"""/no_think
+OUTPUT ONLY the two lines specified at the bottom. Do not show reasoning, planning, or preamble. Just the verdict.
+
+Analyze this file write for both purpose and security implications. Be concise (1-2 sentences).{context_note}
 
 File: {file_name}
 Operation: Created/overwrote file
@@ -441,7 +448,10 @@ Format your response as:
 RISK: [SAFE|MODERATE|DANGEROUS]
 EXPLANATION: [your explanation including any security notes]"""
     else:  # edit or multiedit
-        prompt = f"""Analyze this edit for both purpose and security implications. Be concise (1-2 sentences).{context_note}
+        prompt = f"""/no_think
+OUTPUT ONLY the two lines specified at the bottom. Do not show reasoning, planning, or preamble. Just the verdict.
+
+Analyze this edit for both purpose and security implications. Be concise (1-2 sentences).{context_note}
 
 File: {file_name}
 Operation: {"Multiple edits (batch)" if operation == "multiedit" else "Find and replace"}
